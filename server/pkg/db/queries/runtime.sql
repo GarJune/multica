@@ -209,16 +209,24 @@ SET status = 'offline', updated_at = now()
 WHERE id = ANY(@runtime_ids::uuid[]) AND status = 'online'
 RETURNING id, workspace_id, owner_id, daemon_id, provider;
 
--- name: CancelAgentTasksByRuntime :many
--- Cancels every active task on any runtime in the given set. Used by the
--- member-revocation flow: when a leaving member's runtimes are taken away,
--- their in-flight tasks must stop rather than fail-with-error so the daemon's
--- cancellation poller (which interrupts on status='cancelled') can shut the
--- local agent down cleanly. Returns the affected rows so the caller can
--- broadcast task:cancelled and reconcile per-agent status.
+-- name: CancelAgentTasksByRuntimeOrAgent :many
+-- Cancels every active task that either lives on one of the given runtimes
+-- OR belongs to one of the given agents. Used by the member-revocation flow:
+-- the runtime-side covers tasks queued against the leaving member's runtimes;
+-- the agent-side covers tasks pinned to a different runtime that those agents
+-- left behind from a prior UpdateAgent (agent.runtime_id can change, but
+-- agent_task_queue.runtime_id does not get rewritten when it does, so a task
+-- queued on runtime A by agent X — later moved to runtime B — survives the
+-- runtime-only revoke and could still be claimed because ClaimAgentTask does
+-- not gate on agent.archived_at).
+--
+-- We use 'cancelled' rather than 'failed' so the daemon's per-task status
+-- poller (watchTaskCancellation) interrupts the running agent gracefully.
+-- Returns the affected rows so the caller can broadcast task:cancelled and
+-- reconcile per-agent status.
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
-WHERE runtime_id = ANY(@runtime_ids::uuid[])
+WHERE (runtime_id = ANY(@runtime_ids::uuid[]) OR agent_id = ANY(@agent_ids::uuid[]))
   AND status IN ('queued', 'dispatched', 'running')
 RETURNING *;
 

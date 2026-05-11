@@ -338,6 +338,79 @@ func TestLeaveWorkspace_RevokesOwnRuntimes(t *testing.T) {
 	assertRevoked(t, fx)
 }
 
+// TestDeleteMember_CancelsTasksFromAgentReassignment covers a subtle
+// case: an agent's runtime_id can be changed via UpdateAgent, but
+// agent_task_queue.runtime_id keeps the value from when the task was
+// queued. So after a leaving member is removed, an agent currently bound
+// to their runtime gets archived — but tasks that agent queued under a
+// PRIOR runtime (still owned by another active member) keep their old
+// runtime_id and would not be caught by a runtime-only sweep. Because
+// ClaimAgentTask does not gate on agent.archived_at, those orphaned
+// queued tasks would remain claimable.
+func TestDeleteMember_CancelsTasksFromAgentReassignment(t *testing.T) {
+	fx := setupRevocationFixture(t, "handler-tests-revoke-reassign", "daemon-revoke-reassign")
+	ctx := context.Background()
+
+	// Create a SECOND runtime in the workspace owned by the requester
+	// (not the leaving member). The agent originally lived here.
+	var otherRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_runtime (
+    workspace_id, daemon_id, name, runtime_mode, provider, status,
+    device_info, metadata, owner_id, last_seen_at
+)
+VALUES ($1, $2, 'Other Runtime', 'local', 'multica_daemon', 'online', '', '{}'::jsonb, $3, now())
+RETURNING id
+`, fx.WorkspaceID, "daemon-revoke-reassign-other", testUserID).Scan(&otherRuntimeID); err != nil {
+		t.Fatalf("insert other runtime: %v", err)
+	}
+
+	// Queue a task on the agent while it was still pinned to the OTHER
+	// runtime (simulating a task created before the agent was reassigned
+	// to the leaving member's runtime).
+	var orphanTaskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
+VALUES ($1, $2, 'queued', 0)
+RETURNING id
+`, fx.AgentID, otherRuntimeID).Scan(&orphanTaskID); err != nil {
+		t.Fatalf("insert orphan task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/workspaces/"+fx.WorkspaceID+"/members/"+fx.MemberID, nil)
+	req.Header.Set("X-Workspace-ID", fx.WorkspaceID)
+	req = withURLParams(req, "id", fx.WorkspaceID, "memberId", fx.MemberID)
+	testHandler.DeleteMember(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeleteMember: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertRevoked(t, fx)
+
+	// The orphan task — same agent, different runtime — must also be
+	// cancelled. Without the by-agent leg in CancelAgentTasksByRuntimeOrAgent
+	// this stays 'queued' and would be picked up by the other runtime.
+	var orphanStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, orphanTaskID).Scan(&orphanStatus); err != nil {
+		t.Fatalf("query orphan task: %v", err)
+	}
+	if orphanStatus != "cancelled" {
+		t.Fatalf("expected orphan task cancelled (archived agent leftover on other runtime), got %q", orphanStatus)
+	}
+
+	// And the OTHER runtime — owned by an active member — must still be
+	// online: revocation is scoped to the leaving member's owned runtimes.
+	var otherStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, otherRuntimeID).Scan(&otherStatus); err != nil {
+		t.Fatalf("query other runtime: %v", err)
+	}
+	if otherStatus != "online" {
+		t.Fatalf("expected other-member runtime to stay online, got %q", otherStatus)
+	}
+}
+
 // TestDeleteMember_NoRuntimes_DeletesMember covers the empty-revocation
 // path: a member with no owned runtimes should still have their member row
 // deleted by the same atomic transaction, with no spurious archive/cancel

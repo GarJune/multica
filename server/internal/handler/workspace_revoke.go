@@ -78,7 +78,20 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 			return empty, err
 		}
 
-		result.CancelledTasks, err = qtx.CancelAgentTasksByRuntime(ctx, runtimeIDs)
+		// Cancel by runtime AND by archived agent. agent.runtime_id can be
+		// reassigned via UpdateAgent without rewriting the runtime_id on
+		// historical agent_task_queue rows, so an archived agent may still
+		// have queued/running tasks pinned to a different runtime — and
+		// ClaimAgentTask does not gate on agent.archived_at, so those tasks
+		// would otherwise stay claimable after the agent is gone.
+		archivedAgentIDs := make([]pgtype.UUID, len(result.ArchivedAgents))
+		for i, a := range result.ArchivedAgents {
+			archivedAgentIDs[i] = a.ID
+		}
+		result.CancelledTasks, err = qtx.CancelAgentTasksByRuntimeOrAgent(ctx, db.CancelAgentTasksByRuntimeOrAgentParams{
+			RuntimeIds: runtimeIDs,
+			AgentIds:   archivedAgentIDs,
+		})
 		if err != nil {
 			return empty, err
 		}

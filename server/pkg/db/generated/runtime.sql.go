@@ -11,22 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const cancelAgentTasksByRuntime = `-- name: CancelAgentTasksByRuntime :many
+const cancelAgentTasksByRuntimeOrAgent = `-- name: CancelAgentTasksByRuntimeOrAgent :many
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
-WHERE runtime_id = ANY($1::uuid[])
+WHERE (runtime_id = ANY($1::uuid[]) OR agent_id = ANY($2::uuid[]))
   AND status IN ('queued', 'dispatched', 'running')
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session
 `
 
-// Cancels every active task on any runtime in the given set. Used by the
-// member-revocation flow: when a leaving member's runtimes are taken away,
-// their in-flight tasks must stop rather than fail-with-error so the daemon's
-// cancellation poller (which interrupts on status='cancelled') can shut the
-// local agent down cleanly. Returns the affected rows so the caller can
-// broadcast task:cancelled and reconcile per-agent status.
-func (q *Queries) CancelAgentTasksByRuntime(ctx context.Context, runtimeIds []pgtype.UUID) ([]AgentTaskQueue, error) {
-	rows, err := q.db.Query(ctx, cancelAgentTasksByRuntime, runtimeIds)
+type CancelAgentTasksByRuntimeOrAgentParams struct {
+	RuntimeIds []pgtype.UUID `json:"runtime_ids"`
+	AgentIds   []pgtype.UUID `json:"agent_ids"`
+}
+
+// Cancels every active task that either lives on one of the given runtimes
+// OR belongs to one of the given agents. Used by the member-revocation flow:
+// the runtime-side covers tasks queued against the leaving member's runtimes;
+// the agent-side covers tasks pinned to a different runtime that those agents
+// left behind from a prior UpdateAgent (agent.runtime_id can change, but
+// agent_task_queue.runtime_id does not get rewritten when it does, so a task
+// queued on runtime A by agent X — later moved to runtime B — survives the
+// runtime-only revoke and could still be claimed because ClaimAgentTask does
+// not gate on agent.archived_at).
+//
+// We use 'cancelled' rather than 'failed' so the daemon's per-task status
+// poller (watchTaskCancellation) interrupts the running agent gracefully.
+// Returns the affected rows so the caller can broadcast task:cancelled and
+// reconcile per-agent status.
+func (q *Queries) CancelAgentTasksByRuntimeOrAgent(ctx context.Context, arg CancelAgentTasksByRuntimeOrAgentParams) ([]AgentTaskQueue, error) {
+	rows, err := q.db.Query(ctx, cancelAgentTasksByRuntimeOrAgent, arg.RuntimeIds, arg.AgentIds)
 	if err != nil {
 		return nil, err
 	}
