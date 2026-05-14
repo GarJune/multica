@@ -221,10 +221,7 @@ function activeTimeText(task: AgentTask): string {
 
 // ─── Active row ────────────────────────────────────────────────────────────
 
-// Strip mention markdown syntax `[@Name](mention://...)` → `@Name`
-function stripMentionMarkdown(text: string): string {
-  return text.replace(/\[@([^\]]+)\]\(mention:\/\/[^)]+\)/g, "@$1");
-}
+import { stripMentionMarkdown } from "../utils/strip-mention-markdown";
 
 function useTriggerText(task: AgentTask): string {
   const { t } = useT("issues");
