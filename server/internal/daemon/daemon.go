@@ -2161,6 +2161,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.OpenclawConfigPath != "" {
 		agentEnv["OPENCLAW_CONFIG_PATH"] = env.OpenclawConfigPath
 	}
+	// Grant the wrapper config permission to $include the user's active
+	// config across directories. OpenClaw's $include defaults to confining
+	// resolution to the wrapper's own directory; without this, the
+	// wrapper-out-of-envRoot $include into ~/.openclaw/openclaw.json is
+	// rejected and the run boots with no user-registered agents.
+	if rootsValue, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
+		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = rootsValue
+	}
 	// Inject user-configured custom environment variables (e.g. ANTHROPIC_API_KEY,
 	// ANTHROPIC_BASE_URL for router/proxy mode, or CLAUDE_CODE_USE_BEDROCK for
 	// Bedrock). These are set per-agent via the agent settings UI.
@@ -2737,6 +2745,40 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 	return result
 }
 
+// composeOpenclawIncludeRoots returns the value the daemon should set for
+// OPENCLAW_INCLUDE_ROOTS on the child openclaw process so its `$include`
+// loader will follow the wrapper's reference out of envRoot into the
+// user's active config directory.
+//
+// addRoot is the directory we must grant (typically dirname of the user's
+// active openclaw.json). userValue is whatever the daemon's own
+// environment already has under OPENCLAW_INCLUDE_ROOTS — the user's own
+// cross-directory layout. We prepend addRoot, dedupe by string equality,
+// drop empty path segments, and return ok=false when there's nothing to
+// grant (addRoot is empty — fresh install case), so callers can leave the
+// env var alone in that case.
+//
+// Path separator is the OS-native list separator (`:` on Unix, `;` on
+// Windows) to match how OpenClaw splits the env var.
+func composeOpenclawIncludeRoots(addRoot, userValue string) (string, bool) {
+	if addRoot == "" {
+		return "", false
+	}
+	parts := []string{addRoot}
+	seen := map[string]struct{}{addRoot: {}}
+	for _, p := range strings.Split(userValue, string(os.PathListSeparator)) {
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		parts = append(parts, p)
+	}
+	return strings.Join(parts, string(os.PathListSeparator)), true
+}
+
 // isBlockedEnvKey returns true if the key must not be overridden by user-
 // configured custom_env. This prevents accidental or malicious override of
 // daemon-internal variables and critical system paths.
@@ -2746,7 +2788,7 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME", "OPENCLAW_CONFIG_PATH":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
 		return true
 	}
 	return false

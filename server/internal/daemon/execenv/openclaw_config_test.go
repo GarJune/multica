@@ -116,10 +116,11 @@ func TestPrepareOpenclawConfigDelegatesParsingToCLI(t *testing.T) {
 		]`},
 	})
 
-	cfgPath, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
 	if err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
 	}
+	cfgPath := result.ConfigPath
 	if cfgPath != filepath.Join(envRoot, openclawConfigFile) {
 		t.Errorf("cfgPath = %q, want %q", cfgPath, filepath.Join(envRoot, openclawConfigFile))
 	}
@@ -131,6 +132,14 @@ func TestPrepareOpenclawConfigDelegatesParsingToCLI(t *testing.T) {
 	include, ok := got["$include"].([]any)
 	if !ok || len(include) != 1 || include[0] != userConfigPath {
 		t.Errorf("$include = %v, want [%q]", got["$include"], userConfigPath)
+	}
+
+	// The wrapper $includes a path that lives outside envRoot. OpenClaw
+	// confines $include resolution to the wrapper file's own directory
+	// unless OPENCLAW_INCLUDE_ROOTS lists the target. Surface the user
+	// config's dirname so the daemon can grant it.
+	if result.IncludeRoot != userConfigDir {
+		t.Errorf("IncludeRoot = %q, want %q (dirname of active config so wrapper can $include across dirs)", result.IncludeRoot, userConfigDir)
 	}
 
 	agents := got["agents"].(map[string]any)
@@ -242,10 +251,11 @@ func TestPrepareOpenclawConfigKeyMissingTreatedAsEmpty(t *testing.T) {
 		"config get agents.list --json": {err: errors.New("openclaw: No value at agents.list")},
 	})
 
-	cfgPath, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
 	if err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
 	}
+	cfgPath := result.ConfigPath
 	got := mustReadJSON(t, cfgPath)
 	if _, present := got["agents"].(map[string]any)["list"]; present {
 		t.Errorf("agents.list should be omitted when user has none, got %v", got["agents"])
@@ -275,16 +285,23 @@ func TestPrepareOpenclawConfigFreshInstallNoOnDiskConfig(t *testing.T) {
 		// the stub will fail "unexpected args" if it is.
 	})
 
-	cfgPath, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
 	if err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
 	}
+	cfgPath := result.ConfigPath
 	got := mustReadJSON(t, cfgPath)
 	if _, present := got["$include"]; present {
 		t.Errorf("$include should be absent for fresh install, got %v", got["$include"])
 	}
 	if got["agents"].(map[string]any)["defaults"].(map[string]any)["workspace"] != workDir {
 		t.Errorf("defaults.workspace not set on fresh-install wrapper")
+	}
+	// Fresh install emits no $include, so no extra include root is needed
+	// — the wrapper never steps outside envRoot. Daemon should leave the
+	// user's OPENCLAW_INCLUDE_ROOTS alone.
+	if result.IncludeRoot != "" {
+		t.Errorf("IncludeRoot = %q on fresh install, want empty (no $include emitted)", result.IncludeRoot)
 	}
 }
 
@@ -313,14 +330,101 @@ func TestPrepareOpenclawConfigExpandsTilde(t *testing.T) {
 		"config get agents.list --json": {stdout: "null"},
 	})
 
-	cfgPath, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
 	if err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
 	}
+	cfgPath := result.ConfigPath
 	got := mustReadJSON(t, cfgPath)
 	include := got["$include"].([]any)
 	if include[0] != realPath {
 		t.Errorf("$include[0] = %v, want %q (tilde must be expanded to absolute)", include[0], realPath)
+	}
+	// IncludeRoot must also use the expanded absolute dirname, otherwise
+	// the daemon would export a `~/.openclaw`-shaped root that OpenClaw
+	// would not match against the resolved absolute include target.
+	wantRoot := filepath.Join(fakeHome, ".openclaw")
+	if result.IncludeRoot != wantRoot {
+		t.Errorf("IncludeRoot = %q, want %q (must be expanded absolute dirname)", result.IncludeRoot, wantRoot)
+	}
+}
+
+// TestPrepareOpenclawConfigWrapperLoadableUnderIncludeConfinement is the
+// regression test for the Elon include-confinement blocker. OpenClaw
+// resolves `$include` only inside the wrapper file's own directory unless
+// the target's parent dir is granted via OPENCLAW_INCLUDE_ROOTS. The
+// previous PR wrote a wrapper at envRoot that $included
+// `~/.openclaw/openclaw.json` (cross-directory) but never surfaced the
+// dirname; OpenClaw would have refused to follow the link at runtime.
+//
+// This test simulates the same confinement check OpenClaw performs:
+//
+//   - For every `$include` target, assert filepath.Dir(target) is either
+//     the wrapper's own dir OR matches the IncludeRoot we surface for the
+//     daemon to grant.
+//
+// It does NOT shell out to a real openclaw binary — the spec is small and
+// stable enough that mirroring it in-test is more reliable than depending
+// on the CLI being installed in CI. If this assertion ever drifts from the
+// real loader, the upstream docs are the source of truth:
+// https://github.com/openclaw/openclaw/blob/main/docs/gateway/configuration.md
+func TestPrepareOpenclawConfigWrapperLoadableUnderIncludeConfinement(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+
+	// User's active config sits in its own dir, not envRoot. This is the
+	// realistic shape (~/.openclaw/openclaw.json is never inside the task
+	// workspace) and is the exact case the bug paper-trail flagged.
+	userConfigDir := t.TempDir()
+	userConfigPath := filepath.Join(userConfigDir, "openclaw.json")
+	if err := os.WriteFile(userConfigPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userConfigPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
+	if err != nil {
+		t.Fatalf("prepareOpenclawConfig: %v", err)
+	}
+
+	got := mustReadJSON(t, result.ConfigPath)
+	rawIncludes, ok := got["$include"].([]any)
+	if !ok || len(rawIncludes) == 0 {
+		t.Fatalf("wrapper has no $include entries, but a user config is present: %v", got)
+	}
+
+	// Mirror OpenClaw's confinement check: every cross-dir $include target
+	// must have its dirname covered by either the wrapper's own dir or the
+	// IncludeRoot we surface.
+	wrapperDir := filepath.Dir(result.ConfigPath)
+	granted := []string{wrapperDir}
+	if result.IncludeRoot != "" {
+		granted = append(granted, result.IncludeRoot)
+	}
+	for _, raw := range rawIncludes {
+		target, ok := raw.(string)
+		if !ok {
+			t.Fatalf("$include entry is not a string: %T %v", raw, raw)
+		}
+		targetDir := filepath.Dir(target)
+		allowed := false
+		for _, g := range granted {
+			if targetDir == g {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			t.Errorf("$include target %q has dirname %q which is not in granted include roots %v — OpenClaw would refuse to load it",
+				target, targetDir, granted)
+		}
 	}
 }
 
@@ -352,10 +456,11 @@ func TestPrepareOpenclawSkillWriteMatchesScanPath(t *testing.T) {
 		{Name: "Local Dev", Content: "Spin up the local dev env."},
 	}
 
-	cfgPath, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: stub.bin})
 	if err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
 	}
+	cfgPath := result.ConfigPath
 	if err := writeContextFiles(workDir, "openclaw", TaskContextForEnv{
 		IssueID:     "issue-1",
 		AgentSkills: skills,
@@ -406,6 +511,47 @@ func TestPrepareEnvironmentOpenclawWiresConfigPath(t *testing.T) {
 	workspace := got["agents"].(map[string]any)["defaults"].(map[string]any)["workspace"]
 	if workspace != env.WorkDir {
 		t.Errorf("agents.defaults.workspace = %v, want %q", workspace, env.WorkDir)
+	}
+	// Fresh install path emits no $include, so the Environment should
+	// leave OpenclawIncludeRoot empty — the daemon must NOT spuriously
+	// grant include roots when no cross-dir hop is being made.
+	if env.OpenclawIncludeRoot != "" {
+		t.Errorf("OpenclawIncludeRoot = %q on fresh install, want empty", env.OpenclawIncludeRoot)
+	}
+}
+
+// TestPrepareEnvironmentOpenclawWiresIncludeRoot — when the user has an
+// on-disk active config (the common non-fresh-install case), Prepare must
+// surface the active config's dirname on the Environment so the daemon
+// can export OPENCLAW_INCLUDE_ROOTS. Without this, the wrapper's
+// $include into ~/.openclaw/openclaw.json is rejected at runtime.
+func TestPrepareEnvironmentOpenclawWiresIncludeRoot(t *testing.T) {
+	wsRoot := t.TempDir()
+
+	userCfgDir := t.TempDir()
+	userCfgPath := filepath.Join(userCfgDir, "openclaw.json")
+	if err := os.WriteFile(userCfgPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+
+	env, err := Prepare(PrepareParams{
+		WorkspacesRoot: wsRoot,
+		WorkspaceID:    "ws-1",
+		TaskID:         "33333333-2222-3333-4444-555555555555",
+		AgentName:      "scout",
+		Provider:       "openclaw",
+		OpenclawBin:    stub.bin,
+		Task:           TaskContextForEnv{IssueID: "issue-1"},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if env.OpenclawIncludeRoot != userCfgDir {
+		t.Errorf("OpenclawIncludeRoot = %q, want %q (dirname of active config so daemon can grant OPENCLAW_INCLUDE_ROOTS)", env.OpenclawIncludeRoot, userCfgDir)
 	}
 }
 

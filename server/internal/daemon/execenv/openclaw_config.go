@@ -34,12 +34,24 @@ type OpenclawConfigPrep struct {
 	Timeout time.Duration
 }
 
+// OpenclawConfigResult is what prepareOpenclawConfig returns to its callers
+// in execenv.go. ConfigPath is the wrapper file the daemon points
+// OPENCLAW_CONFIG_PATH at. IncludeRoot is the directory the daemon must add
+// to OPENCLAW_INCLUDE_ROOTS so OpenClaw will follow the $include link out
+// of envRoot into the user's active config; it is empty when no $include
+// is emitted (fresh install).
+type OpenclawConfigResult struct {
+	ConfigPath  string
+	IncludeRoot string
+}
+
 // prepareOpenclawConfig writes a per-task OpenClaw config to envRoot and
-// returns its absolute path. The daemon sets OPENCLAW_CONFIG_PATH to this
-// path on the spawned openclaw subprocess so the CLI resolves its
-// `agents.defaults.workspace` (and every `agents.list[].workspace`) to the
-// task workdir — which is what makes OpenClaw's native skill scanner pick
-// up the per-task skills we write under `<workDir>/skills/`.
+// returns its absolute path along with the include root the daemon must
+// grant. The daemon sets OPENCLAW_CONFIG_PATH to the path on the spawned
+// openclaw subprocess so the CLI resolves its `agents.defaults.workspace`
+// (and every `agents.list[].workspace`) to the task workdir — which is
+// what makes OpenClaw's native skill scanner pick up the per-task skills
+// we write under `<workDir>/skills/`.
 //
 // Strategy: delegate JSON5 / $include / env-substitution / state-dir
 // resolution to the openclaw CLI itself rather than re-implementing the
@@ -57,6 +69,16 @@ type OpenclawConfigPrep struct {
 //     workDir. The original config bytes are not mutated — they are loaded
 //     by openclaw's own loader through the $include link, which preserves
 //     comments, secrets, and nested $include chains verbatim.
+//
+// **Cross-directory $include confinement.** OpenClaw confines `$include`
+// resolution to the directory containing the wrapper file unless the
+// target's parent is listed in `OPENCLAW_INCLUDE_ROOTS`. Our wrapper lives
+// in envRoot but $includes the user's active config (typically
+// `~/.openclaw/openclaw.json`) — a cross-directory hop. We surface
+// `filepath.Dir(activePath)` as IncludeRoot so the daemon can prepend it
+// to whatever the user already has in OPENCLAW_INCLUDE_ROOTS; without
+// this, OpenClaw refuses to follow the link and the wrapper boots with no
+// user config. Fresh install emits no $include, so IncludeRoot is "".
 //
 // **Intentional task isolation.** The override of every per-agent workspace
 // is deliberate. OpenClaw's resolution order is
@@ -79,7 +101,7 @@ type OpenclawConfigPrep struct {
 // agent or failing to authenticate. The only "synthesize minimal" case
 // kept is a fresh install where the CLI reports a path but no file exists
 // — there is no user data to lose in that case.
-func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (string, error) {
+func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (OpenclawConfigResult, error) {
 	bin := opts.OpenclawBin
 	if bin == "" {
 		bin = "openclaw"
@@ -91,14 +113,14 @@ func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (st
 
 	activePath, exists, err := openclawActiveConfigPath(bin, timeout)
 	if err != nil {
-		return "", fmt.Errorf("locate openclaw active config: %w", err)
+		return OpenclawConfigResult{}, fmt.Errorf("locate openclaw active config: %w", err)
 	}
 
 	var resolvedList []any
 	if exists {
 		resolvedList, err = openclawResolvedAgentsList(bin, timeout)
 		if err != nil {
-			return "", fmt.Errorf("read openclaw agents.list: %w", err)
+			return OpenclawConfigResult{}, fmt.Errorf("read openclaw agents.list: %w", err)
 		}
 	}
 
@@ -106,16 +128,24 @@ func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (st
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("marshal openclaw config: %w", err)
+		return OpenclawConfigResult{}, fmt.Errorf("marshal openclaw config: %w", err)
 	}
 	outPath := filepath.Join(envRoot, openclawConfigFile)
 	// 0o600 — defense in depth. The wrapper itself carries no secrets (the
 	// $include link is just a filesystem path), but the file lives next to
 	// task scratch and we keep the same posture as ~/.openclaw/openclaw.json.
 	if err := os.WriteFile(outPath, data, 0o600); err != nil {
-		return "", fmt.Errorf("write openclaw config: %w", err)
+		return OpenclawConfigResult{}, fmt.Errorf("write openclaw config: %w", err)
 	}
-	return outPath, nil
+	result := OpenclawConfigResult{ConfigPath: outPath}
+	if exists {
+		// Only emit an include root when we actually emit a $include line
+		// (i.e. the user has an on-disk config). On fresh install the
+		// wrapper is self-contained and OpenClaw never needs to step out
+		// of envRoot, so no extra root is required.
+		result.IncludeRoot = filepath.Dir(activePath)
+	}
+	return result, nil
 }
 
 // buildPerTaskOpenclawConfig assembles the wrapper map that goes on disk.

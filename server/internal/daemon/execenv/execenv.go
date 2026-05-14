@@ -90,6 +90,14 @@ type Environment struct {
 	// OPENCLAW_CONFIG_PATH on the openclaw subprocess so its native skill
 	// scanner pins workspaceDir to WorkDir.
 	OpenclawConfigPath string
+	// OpenclawIncludeRoot is the directory of the user's active OpenClaw
+	// config (set only for openclaw provider with an on-disk user config).
+	// The daemon must prepend it to OPENCLAW_INCLUDE_ROOTS so OpenClaw is
+	// allowed to follow the wrapper's `$include` link out of envRoot into
+	// the user's config — by default OpenClaw confines `$include` to the
+	// directory holding the wrapper file. Empty when no $include is
+	// emitted (fresh install).
+	OpenclawIncludeRoot string
 
 	logger *slog.Logger // for cleanup logging
 }
@@ -165,11 +173,12 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	// silently degrading to a minimal config would mask it by booting
 	// OpenClaw without the agents / providers / API keys it expects.
 	if params.Provider == "openclaw" {
-		cfgPath, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: params.OpenclawBin})
+		result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{OpenclawBin: params.OpenclawBin})
 		if err != nil {
 			return nil, fmt.Errorf("execenv: prepare openclaw config: %w", err)
 		}
-		env.OpenclawConfigPath = cfgPath
+		env.OpenclawConfigPath = result.ConfigPath
+		env.OpenclawIncludeRoot = result.IncludeRoot
 	}
 
 	logger.Info("execenv: prepared env", "root", envRoot, "repos_available", len(params.Task.Repos))
@@ -227,12 +236,13 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// reuse rather than degrade to a minimal config that boots OpenClaw
 	// without the registered agents.
 	if params.Provider == "openclaw" {
-		cfgPath, err := prepareOpenclawConfig(env.RootDir, params.WorkDir, OpenclawConfigPrep{OpenclawBin: params.OpenclawBin})
+		result, err := prepareOpenclawConfig(env.RootDir, params.WorkDir, OpenclawConfigPrep{OpenclawBin: params.OpenclawBin})
 		if err != nil {
 			logger.Warn("execenv: refresh openclaw config failed", "error", err)
 			return nil
 		}
-		env.OpenclawConfigPath = cfgPath
+		env.OpenclawConfigPath = result.ConfigPath
+		env.OpenclawIncludeRoot = result.IncludeRoot
 	}
 
 	logger.Info("execenv: reusing env", "workdir", params.WorkDir)
