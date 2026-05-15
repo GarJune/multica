@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +25,91 @@ type GitHubRelease struct {
 	TagName string               `json:"tag_name"`
 	HTMLURL string               `json:"html_url"`
 	Assets  []GitHubReleaseAsset `json:"assets"`
+}
+
+// IsReleaseVersion reports whether v looks like a tagged release version
+// (e.g. "0.1.13", "v0.1.13") rather than a dev build (e.g. an empty version
+// or a `git describe`–style "v0.2.15-235-gdaf0e935"). The auto-update poller
+// uses this to skip self-update for source builds, where downgrading to a
+// public release would clobber unreleased changes.
+func IsReleaseVersion(v string) bool {
+	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// IsNewerVersion reports whether latest is strictly newer than current. Both
+// arguments may carry an optional "v" prefix; non-numeric tails are ignored
+// (a 4th component, pre-release tag, etc.). Returns false if either side
+// cannot be parsed — the caller treats that as "stay on current".
+func IsNewerVersion(latest, current string) bool {
+	l, ok := parseReleaseVersion(latest)
+	if !ok {
+		return false
+	}
+	c, ok := parseReleaseVersion(current)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
+}
+
+// parseReleaseVersion extracts the first three numeric components of v. Returns
+// (parts, true) on success; (_, false) when v is missing, malformed, or carries
+// the dev-describe suffix. Designed to be strict so dev builds don't get
+// auto-upgraded by accident.
+func parseReleaseVersion(v string) ([3]int, bool) {
+	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if s == "" {
+		return [3]int{}, false
+	}
+	parts := strings.SplitN(s, ".", 4)
+	if len(parts) < 3 {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i := 0; i < 3; i++ {
+		// Trim any non-numeric tail on the patch component (e.g. "13-235-gdeadbeef").
+		clean := parts[i]
+		if i == 2 {
+			for j, r := range clean {
+				if r < '0' || r > '9' {
+					clean = clean[:j]
+					break
+				}
+			}
+		}
+		if clean == "" {
+			return [3]int{}, false
+		}
+		n, err := strconv.Atoi(clean)
+		if err != nil {
+			return [3]int{}, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 type GitHubReleaseAsset struct {

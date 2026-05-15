@@ -124,6 +124,10 @@ type Daemon struct {
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
+	// runUpdateFn executes the brew-or-download upgrade. Set to d.runUpdate by
+	// New() and overridable in tests so the auto-update poller can be exercised
+	// without touching the real network or the brew CLI.
+	runUpdateFn func(targetVersion string) (string, error)
 }
 
 // New creates a new Daemon instance.
@@ -150,6 +154,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cancelPollInterval:        5 * time.Second,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
+	d.runUpdateFn = d.runUpdate
 	return d
 }
 
@@ -596,6 +601,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
 	go d.gcLoop(ctx)
+	go d.autoUpdateLoop(ctx)
 	go d.serveHealth(ctx, healthLn, time.Now())
 	return d.pollLoop(ctx, taskWakeups)
 }
@@ -1456,32 +1462,14 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		"status": "running",
 	})
 
-	// Try Homebrew first, fall back to direct download.
-	var output string
-	if cli.IsBrewInstall() {
-		d.logger.Info("updating CLI via Homebrew...")
-		var err error
-		output, err = cli.UpdateViaBrew()
-		if err != nil {
-			d.logger.Error("CLI update failed", "error", err, "output", output)
-			d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  fmt.Sprintf("brew upgrade failed: %v", err),
-			})
-			return
-		}
-	} else {
-		d.logger.Info("updating CLI via direct download...", "target_version", update.TargetVersion)
-		var err error
-		output, err = cli.UpdateViaDownload(update.TargetVersion)
-		if err != nil {
-			d.logger.Error("CLI update failed", "error", err)
-			d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  fmt.Sprintf("download update failed: %v", err),
-			})
-			return
-		}
+	output, err := d.runUpdateFn(update.TargetVersion)
+	if err != nil {
+		d.logger.Error("CLI update failed", "error", err, "output", output)
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
 	}
 
 	d.logger.Info("CLI update completed successfully", "output", output)
@@ -1492,6 +1480,29 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	// Trigger daemon restart with the new binary.
 	d.triggerRestart()
+}
+
+// runUpdate executes the brew-or-download upgrade against targetVersion and
+// returns the human-readable output (always populated, even on failure when
+// brew gives us a useful diagnostic). The caller is responsible for the
+// `updating` CAS guard and for reporting status back to the server / triggering
+// the restart — extracted so the server-triggered path (handleUpdate) and the
+// auto-update poller (autoUpdateLoop) share the exact same execution body.
+func (d *Daemon) runUpdate(targetVersion string) (string, error) {
+	if cli.IsBrewInstall() {
+		d.logger.Info("updating CLI via Homebrew...")
+		out, err := cli.UpdateViaBrew()
+		if err != nil {
+			return out, fmt.Errorf("brew upgrade failed: %w", err)
+		}
+		return out, nil
+	}
+	d.logger.Info("updating CLI via direct download...", "target_version", targetVersion)
+	out, err := cli.UpdateViaDownload(targetVersion)
+	if err != nil {
+		return out, fmt.Errorf("download update failed: %w", err)
+	}
+	return out, nil
 }
 
 // updateReportBackoffs defines the retry schedule for delivering CLI update
