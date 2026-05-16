@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1066,6 +1067,23 @@ func runIssueRuns(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("list runs: %w", err)
 	}
 
+	// Merge in interactive terminal sessions so `issue runs` is the single
+	// surface for "what has happened in this workdir" — agent runs and the
+	// `type=terminal` audit rows side by side, per RFC §"与现有 agent run
+	// sandbox 的关系". The endpoint is new in MUL-2295 Phase 4; older
+	// servers return 404, which we treat as "no terminal feature" rather
+	// than a hard error so the CLI keeps working against pre-feature
+	// servers.
+	var terminals []map[string]any
+	if err := client.GetJSON(ctx, "/api/issues/"+issueRef.ID+"/terminal-sessions", &terminals); err == nil {
+		runs = append(runs, terminals...)
+	}
+	// Sort merged list newest-first by started_at so the table renders in
+	// the same order whether or not terminal rows are present.
+	sort.SliceStable(runs, func(i, j int) bool {
+		return strVal(runs[i], "started_at") > strVal(runs[j], "started_at")
+	})
+
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
 		return cli.PrintJSON(os.Stdout, runs)
@@ -1081,6 +1099,9 @@ func runIssueRuns(cmd *cobra.Command, args []string) error {
 			started = started[:16]
 		}
 		completed := strVal(r, "completed_at")
+		if completed == "" {
+			completed = strVal(r, "ended_at")
+		}
 		if len(completed) >= 16 {
 			completed = completed[:16]
 		}
@@ -1089,9 +1110,20 @@ func runIssueRuns(cmd *cobra.Command, args []string) error {
 			runes := []rune(errMsg)
 			errMsg = string(runes[:47]) + "..."
 		}
+		// Terminal rows have kind="terminal" and no agent_id. Surface them
+		// with a synthetic agent column ("terminal") so the user can tell
+		// the two row kinds apart at a glance without us adding a new
+		// column (keeps the table width stable on narrow terminals).
+		agent := actors.agent(strVal(r, "agent_id"))
+		if strVal(r, "kind") == "terminal" {
+			agent = "terminal"
+			if errMsg == "" {
+				errMsg = strVal(r, "close_reason")
+			}
+		}
 		rows = append(rows, []string{
 			displayID(strVal(r, "id"), fullID),
-			actors.agent(strVal(r, "agent_id")),
+			agent,
 			strVal(r, "status"),
 			started,
 			completed,

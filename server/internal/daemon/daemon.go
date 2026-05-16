@@ -195,8 +195,10 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	// the DB before forwarding terminal.open over daemonws (the daemon
 	// does not maintain a persistent task cache).
 	d.terminalManager = terminal.NewManager(terminal.ManagerConfig{
-		IdleTimeout: terminal.DefaultIdleTimeout,
-		Logger:      logger,
+		IdleTimeout:    terminal.DefaultIdleTimeout,
+		Logger:         logger,
+		OnSessionStart: d.onTerminalSessionStart,
+		OnSessionStop:  d.onTerminalSessionStop,
 	}, nil)
 	return d
 }
@@ -3106,6 +3108,46 @@ func (d *Daemon) isActiveEnvRoot(envRoot string) bool {
 	d.activeEnvRootsMu.Lock()
 	defer d.activeEnvRootsMu.Unlock()
 	return d.activeEnvRoots[envRoot] > 0
+}
+
+// onTerminalSessionStart is the terminal.Manager OnSessionStart hook. It
+// reference-counts the session's env root into activeEnvRoots so the GC
+// loop's isActiveEnvRoot check protects the workdir while a terminal is
+// attached. Without this, an idle terminal on a done/cancelled issue
+// would have its workdir reclaimed out from under the user on the next
+// GC cycle (the issue's TTL alone doesn't notice live terminal activity).
+//
+// Audit log is emitted here as a structured slog record so operators can
+// reconstruct who attached to which workdir when, without surfacing
+// keystrokes — see RFC §Auth.
+func (d *Daemon) onTerminalSessionStart(s *terminal.PtySession) {
+	envRoot := filepath.Dir(s.WorkDir())
+	d.markActiveEnvRoot(envRoot)
+	d.logger.Info("terminal: session opened",
+		"session_id", s.ID(),
+		"task_id", s.TaskID(),
+		"workspace_id", s.WorkspaceID(),
+		"issue_id", s.IssueID(),
+		"user_id", s.UserID(),
+		"work_dir", s.WorkDir(),
+		"shell", s.Shell(),
+	)
+}
+
+// onTerminalSessionStop is the terminal.Manager OnSessionStop hook. Pairs
+// with onTerminalSessionStart's mark and emits the close audit record
+// (with duration) for operator visibility.
+func (d *Daemon) onTerminalSessionStop(s *terminal.PtySession) {
+	envRoot := filepath.Dir(s.WorkDir())
+	d.unmarkActiveEnvRoot(envRoot)
+	d.logger.Info("terminal: session closed",
+		"session_id", s.ID(),
+		"task_id", s.TaskID(),
+		"workspace_id", s.WorkspaceID(),
+		"issue_id", s.IssueID(),
+		"user_id", s.UserID(),
+		"duration", time.Since(s.StartedAt()).Round(time.Second).String(),
+	)
 }
 
 // shortID returns the first 8 characters of an ID for readable logs.

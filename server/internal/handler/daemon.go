@@ -1927,6 +1927,93 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// TerminalSessionResponse is the JSON shape behind GET
+// /api/issues/{id}/terminal-sessions. Mirrors terminal_sessions row fields
+// with the timestamp formatting the rest of the API uses (RFC3339 strings
+// for clients that parse loosely; pointers for nullable columns).
+type TerminalSessionResponse struct {
+	ID          string  `json:"id"`
+	WorkspaceID string  `json:"workspace_id"`
+	IssueID     string  `json:"issue_id"`
+	TaskID      string  `json:"task_id"`
+	RuntimeID   string  `json:"runtime_id,omitempty"`
+	UserID      string  `json:"user_id"`
+	WorkDir     string  `json:"work_dir"`
+	Shell       string  `json:"shell,omitempty"`
+	StartedAt   string  `json:"started_at"`
+	EndedAt     *string `json:"ended_at"`
+	ExitCode    *int32  `json:"exit_code"`
+	CloseReason string  `json:"close_reason,omitempty"`
+	// Status is derived: "active" while the row's ended_at is NULL,
+	// "closed" otherwise. We expose it explicitly so the CLI's `issue
+	// runs` table — which shares its STATUS column with agent task rows —
+	// can render terminal entries without bespoke logic.
+	Status string `json:"status"`
+	// Kind discriminates these rows from agent task rows in clients that
+	// merge both feeds (notably `multica issue runs`).
+	Kind string `json:"kind"`
+}
+
+// ListTerminalSessionsByIssue returns the audit log of interactive PTYs
+// opened against the issue's tasks. The CLI's `issue runs` view fetches
+// this alongside /task-runs and merges them by timestamp so a `multica
+// issue runs` listing shows both agent runs and `type=terminal` rows.
+func (h *Handler) ListTerminalSessionsByIssue(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, issueID)
+	if !ok {
+		return
+	}
+
+	sessions, err := h.Queries.ListTerminalSessionsByIssue(r.Context(), issue.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list terminal sessions")
+		return
+	}
+
+	resp := make([]TerminalSessionResponse, len(sessions))
+	for i, s := range sessions {
+		resp[i] = terminalSessionToResponse(s)
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func terminalSessionToResponse(s db.TerminalSession) TerminalSessionResponse {
+	status := "active"
+	var endedAt *string
+	var exitCode *int32
+	if s.EndedAt.Valid {
+		status = "closed"
+		stamp := s.EndedAt.Time.UTC().Format(time.RFC3339)
+		endedAt = &stamp
+	}
+	if s.ExitCode.Valid {
+		v := s.ExitCode.Int32
+		exitCode = &v
+	}
+	runtimeID := ""
+	if s.RuntimeID.Valid {
+		runtimeID = uuidToString(s.RuntimeID)
+	}
+	return TerminalSessionResponse{
+		ID:          uuidToString(s.ID),
+		WorkspaceID: uuidToString(s.WorkspaceID),
+		IssueID:     uuidToString(s.IssueID),
+		TaskID:      uuidToString(s.TaskID),
+		RuntimeID:   runtimeID,
+		UserID:      uuidToString(s.UserID),
+		WorkDir:     s.WorkDir,
+		Shell:       s.Shell,
+		StartedAt:   s.StartedAt.Time.UTC().Format(time.RFC3339),
+		EndedAt:     endedAt,
+		ExitCode:    exitCode,
+		CloseReason: s.CloseReason,
+		Status:      status,
+		Kind:        "terminal",
+	}
+}
+
 // ListTaskMessagesByUser returns task messages for a task.
 // Used by the frontend under regular user auth (not daemon auth).
 // Verifies the task belongs to the caller's workspace.

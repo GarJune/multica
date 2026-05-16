@@ -563,6 +563,21 @@ type TaskUsageRollupState struct {
 	LastError         pgtype.Text        `json:"last_error"`
 }
 
+type TerminalSession struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	TaskID      pgtype.UUID        `json:"task_id"`
+	RuntimeID   pgtype.UUID        `json:"runtime_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	WorkDir     string             `json:"work_dir"`
+	Shell       string             `json:"shell"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	EndedAt     pgtype.Timestamptz `json:"ended_at"`
+	ExitCode    pgtype.Int4        `json:"exit_code"`
+	CloseReason string             `json:"close_reason"`
+}
+
 type User struct {
 	ID                      pgtype.UUID        `json:"id"`
 	Name                    string             `json:"name"`

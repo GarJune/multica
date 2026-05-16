@@ -73,6 +73,20 @@ type ManagerConfig struct {
 
 	// Logger receives operational events. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// OnSessionStart fires synchronously after a PTY has spawned and the
+	// session is registered. Wired by the daemon to mark the env root as
+	// active so the GC loop's isActiveEnvRoot check protects the workdir
+	// for as long as a terminal is attached — without this, a long-idle
+	// terminal on a done/cancelled issue would have its workdir reclaimed
+	// out from under the user. Called from Open's caller goroutine.
+	OnSessionStart func(s *PtySession)
+
+	// OnSessionStop fires from waitLoop after the session has been fully
+	// finalized (output closed, deregistered, Done closed). Daemons that
+	// reference-counted in OnSessionStart unmark here. Called exactly once
+	// per session, regardless of close reason.
+	OnSessionStop func(s *PtySession)
 }
 
 // Manager owns all live PtySessions on this daemon. It is safe for
@@ -223,7 +237,11 @@ func (m *Manager) openWith(info TaskInfo, p OpenParams) (*PtySession, error) {
 	m.sessions[sess.id] = sess
 	m.mu.Unlock()
 
+	sess.onStop = m.cfg.OnSessionStop
 	sess.start()
+	if m.cfg.OnSessionStart != nil {
+		m.cfg.OnSessionStart(sess)
+	}
 	return sess, nil
 }
 

@@ -49,6 +49,7 @@ type PtySession struct {
 
 	logger  *slog.Logger
 	onClose func(string)
+	onStop  func(*PtySession)
 }
 
 // ID returns the session identifier.
@@ -241,6 +242,13 @@ func (s *PtySession) waitLoop() {
 	close(s.output)
 	if s.onClose != nil {
 		s.onClose(s.id)
+	}
+	if s.onStop != nil {
+		// Fires after deregister so a Manager.OnSessionStop callback sees a
+		// session that no longer appears in Sessions()/Get(); fires before
+		// close(done) so `<-Done()` implies the daemon's GC-unmark hook
+		// has already run.
+		s.onStop(s)
 	}
 	close(s.done)
 }

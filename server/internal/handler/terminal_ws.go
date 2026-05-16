@@ -131,7 +131,114 @@ func (h *Handler) HandleIssueTerminalWS(w http.ResponseWriter, r *http.Request) 
 	rows := parseUint16Query(r, "rows", 24)
 
 	proxy := newTerminalProxy(conn, h.DaemonHub, userID, util.UUIDToString(task.RuntimeID), util.UUIDToString(task.ID), workspaceID, util.UUIDToString(issue.ID), task.SessionID.String, task.WorkDir.String, cols, rows)
+	proxy.audit = newTerminalAuditRecorder(h, util.UUIDToString(issue.ID), util.UUIDToString(task.ID), util.UUIDToString(task.RuntimeID), workspaceID, userID, task.WorkDir.String)
 	proxy.run()
+}
+
+// terminalAuditRecorder writes terminal_sessions rows for the audit log
+// (RFC §Auth) and as the data source behind `multica issue runs`'
+// `type=terminal` entries. Persisting happens out-of-band on a background
+// context so a slow DB write can't stall the WS handshake — the trade-off
+// is that an audit row may briefly lag the actual session open by a few
+// milliseconds, which is acceptable for an audit surface.
+type terminalAuditRecorder struct {
+	h           *Handler
+	issueID     string
+	taskID      string
+	runtimeID   string
+	workspaceID string
+	userID      string
+	workDir     string
+}
+
+func newTerminalAuditRecorder(h *Handler, issueID, taskID, runtimeID, workspaceID, userID, workDir string) *terminalAuditRecorder {
+	if h == nil || h.Queries == nil {
+		// Tests that build a handler without DB queries (terminal protocol
+		// tests, etc.) skip recording — keep that path nil-safe so the
+		// audit hook never panics in a unit environment.
+		return nil
+	}
+	return &terminalAuditRecorder{
+		h:           h,
+		issueID:     issueID,
+		taskID:      taskID,
+		runtimeID:   runtimeID,
+		workspaceID: workspaceID,
+		userID:      userID,
+		workDir:     workDir,
+	}
+}
+
+func (a *terminalAuditRecorder) RecordOpen(sessionID, shell string) {
+	if a == nil {
+		return
+	}
+	sessUUID, err := util.ParseUUID(sessionID)
+	if err != nil {
+		slog.Debug("terminal audit: invalid session id", "session_id", sessionID, "error", err)
+		return
+	}
+	issueUUID, err := util.ParseUUID(a.issueID)
+	if err != nil {
+		return
+	}
+	taskUUID, err := util.ParseUUID(a.taskID)
+	if err != nil {
+		return
+	}
+	wsUUID, err := util.ParseUUID(a.workspaceID)
+	if err != nil {
+		return
+	}
+	userUUID, err := util.ParseUUID(a.userID)
+	if err != nil {
+		return
+	}
+	var runtimeUUID pgtype.UUID
+	if a.runtimeID != "" {
+		if parsed, perr := util.ParseUUID(a.runtimeID); perr == nil {
+			runtimeUUID = parsed
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := a.h.Queries.CreateTerminalSession(ctx, db.CreateTerminalSessionParams{
+		ID:          sessUUID,
+		WorkspaceID: wsUUID,
+		IssueID:     issueUUID,
+		TaskID:      taskUUID,
+		RuntimeID:   runtimeUUID,
+		UserID:      userUUID,
+		WorkDir:     a.workDir,
+		Shell:       shell,
+		StartedAt:   pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+	}); err != nil {
+		slog.Warn("terminal audit: record open failed", "session_id", sessionID, "error", err)
+	}
+}
+
+func (a *terminalAuditRecorder) RecordClose(sessionID string, exitCode int32, hasExit bool, reason string) {
+	if a == nil || sessionID == "" {
+		return
+	}
+	sessUUID, err := util.ParseUUID(sessionID)
+	if err != nil {
+		return
+	}
+	var code pgtype.Int4
+	if hasExit {
+		code = pgtype.Int4{Int32: exitCode, Valid: true}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.h.Queries.CloseTerminalSession(ctx, db.CloseTerminalSessionParams{
+		ID:          sessUUID,
+		EndedAt:     pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		ExitCode:    code,
+		CloseReason: reason,
+	}); err != nil {
+		slog.Warn("terminal audit: record close failed", "session_id", sessionID, "error", err)
+	}
 }
 
 // terminalProxy is the per-connection bridge between browser and daemon.
@@ -148,6 +255,8 @@ type terminalProxy struct {
 	issueID     string
 	priorSess   string
 	workDir     string
+	cols        uint16
+	rows        uint16
 
 	requestID string
 
@@ -159,6 +268,19 @@ type terminalProxy struct {
 
 	openedCh chan struct{}
 	openErr  chan terminalOpenFailure
+
+	// audit is the persistence hook for terminal_sessions rows (RFC §Auth).
+	// nil in tests that build a proxy without a Handler — every call site
+	// is nil-safe through the recorder methods.
+	audit *terminalAuditRecorder
+
+	// exitMu guards exitCode/hasExit, written from writePump when the
+	// daemon sends terminal.exit and read from the run() defer that
+	// finalizes the audit row.
+	exitMu   sync.Mutex
+	exitCode int32
+	hasExit  bool
+	exitMsg  string
 }
 
 type terminalOpenFailure struct {
@@ -177,6 +299,8 @@ func newTerminalProxy(conn *websocket.Conn, hub *daemonws.Hub, userID, runtimeID
 		issueID:     issueID,
 		priorSess:   priorSess,
 		workDir:     workDir,
+		cols:        cols,
+		rows:        rows,
 		requestID:   uuid.NewString(),
 		closeCh:     make(chan struct{}),
 		sendCh:      make(chan []byte, 256),
@@ -252,6 +376,16 @@ func (p *terminalProxy) run() {
 			if err == nil {
 				_ = p.hub.SendToRuntime(p.runtimeID, frame)
 			}
+			// Stamp the audit row. If the daemon sent terminal.exit before
+			// we got here, use its exit code + reason; otherwise this is a
+			// browser-initiated disconnect.
+			p.exitMu.Lock()
+			code, has, reason := p.exitCode, p.hasExit, p.exitMsg
+			p.exitMu.Unlock()
+			if reason == "" {
+				reason = "browser_disconnect"
+			}
+			p.audit.RecordClose(sid, code, has, reason)
 		}
 	}()
 
@@ -273,8 +407,8 @@ func (p *terminalProxy) sendOpenToDaemon() error {
 		IssueID:        p.issueID,
 		WorkDir:        p.workDir,
 		PriorSessionID: p.priorSess,
-		Cols:           80,
-		Rows:           24,
+		Cols:           p.cols,
+		Rows:           p.rows,
 	}
 	frame, err := marshalTerminalFrame(protocol.MessageTypeTerminalOpen, payload)
 	if err != nil {
@@ -358,11 +492,30 @@ func (p *terminalProxy) writePump() {
 				return
 			}
 			p.forwardToBrowser(frame)
-			if p.SessionID() != "" {
-				continue
-			}
+			// terminal.exit can arrive at any point in the session lifecycle
+			// (idle timeout, child crash, manager shutdown), so we always
+			// peek the envelope to capture the exit code for the audit row.
+			// terminal.opened / terminal.error are only meaningful during
+			// the open handshake window — once sessionID is set they are
+			// just relayed without re-inspection.
 			var env protocol.Message
 			if err := json.Unmarshal(frame, &env); err != nil {
+				continue
+			}
+			if env.Type == protocol.MessageTypeTerminalExit {
+				var ep protocol.TerminalExitPayload
+				if err := json.Unmarshal(env.Payload, &ep); err == nil {
+					p.exitMu.Lock()
+					p.exitCode = int32(ep.ExitCode)
+					p.hasExit = true
+					if ep.Reason != "" {
+						p.exitMsg = ep.Reason
+					}
+					p.exitMu.Unlock()
+				}
+				continue
+			}
+			if p.SessionID() != "" {
 				continue
 			}
 			switch env.Type {
@@ -374,6 +527,10 @@ func (p *terminalProxy) writePump() {
 					p.mu.Unlock()
 					router.Register(op.SessionID, p)
 					router.Unregister(p.requestID)
+					// Persist the open audit row before unblocking run(). If
+					// the DB write fails the slog records the error; the
+					// session itself still runs (audit is best-effort).
+					p.audit.RecordOpen(op.SessionID, op.Shell)
 					close(p.openedCh)
 				}
 			case protocol.MessageTypeTerminalError:

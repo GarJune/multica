@@ -896,3 +896,81 @@ func TestManager_CloseWaitsForSessionFinalize(t *testing.T) {
 		}
 	}
 }
+
+// TestManager_OnSessionHooksFireAroundDeregister verifies the Phase 4 GC
+// hook contract: OnSessionStart fires after Open registers the session
+// (so the daemon's markActiveEnvRoot sees a session it can later Get),
+// OnSessionStop fires after the session is deregistered but before
+// Done() closes (so `<-Done()` implies the unmark hook has already run).
+// Both hooks fire exactly once.
+func TestManager_OnSessionHooksFireAroundDeregister(t *testing.T) {
+	var startCount, stopCount atomic.Int32
+	var startedID, stoppedID atomic.Value
+
+	deregisteredAtStop := make(chan bool, 1)
+
+	f := newFixture(t, func(c *ManagerConfig) {
+		c.OnSessionStart = func(s *PtySession) {
+			startCount.Add(1)
+			startedID.Store(s.ID())
+		}
+	})
+	f.mgr.cfg.OnSessionStop = func(s *PtySession) {
+		stopCount.Add(1)
+		stoppedID.Store(s.ID())
+		_, getErr := f.mgr.Get(s.ID())
+		deregisteredAtStop <- errors.Is(getErr, ErrSessionNotFound)
+	}
+	defer f.mgr.Close()
+
+	sess, err := f.mgr.Open(context.Background(), OpenParams{TaskID: "task-1", WorkspaceID: "ws-A"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	id := sess.ID()
+	if got := startCount.Load(); got != 1 {
+		t.Errorf("OnSessionStart fired %d times, want 1", got)
+	}
+	if v, _ := startedID.Load().(string); v != id {
+		t.Errorf("OnSessionStart got id %q, want %q", v, id)
+	}
+
+	sess.Close("user_requested")
+	<-sess.Done()
+
+	if got := stopCount.Load(); got != 1 {
+		t.Errorf("OnSessionStop fired %d times, want 1", got)
+	}
+	if v, _ := stoppedID.Load().(string); v != id {
+		t.Errorf("OnSessionStop got id %q, want %q", v, id)
+	}
+	select {
+	case wasDeregistered := <-deregisteredAtStop:
+		if !wasDeregistered {
+			t.Error("OnSessionStop fired before manager deregistered the session — GC unmark would race a stale Get")
+		}
+	default:
+		t.Fatal("OnSessionStop did not deliver the deregister check")
+	}
+}
+
+// TestManager_OnSessionStartNotFiredOnSpawnFailure makes sure the hook is
+// symmetric with the registration: if Spawn fails, OnSessionStart must
+// NOT fire (otherwise the daemon would mark an env root it never used,
+// pinning a workdir against GC forever).
+func TestManager_OnSessionStartNotFiredOnSpawnFailure(t *testing.T) {
+	var startCount atomic.Int32
+	f := newFixture(t, func(c *ManagerConfig) {
+		c.OnSessionStart = func(*PtySession) { startCount.Add(1) }
+	})
+	defer f.mgr.Close()
+	f.spawner.make = func(*testing.T, SpawnRequest) (*fakePTY, error) {
+		return nil, errors.New("disk full")
+	}
+	if _, err := f.mgr.Open(context.Background(), OpenParams{TaskID: "task-1", WorkspaceID: "ws-A"}); err == nil {
+		t.Fatal("Open succeeded despite spawn failure")
+	}
+	if got := startCount.Load(); got != 0 {
+		t.Errorf("OnSessionStart fired %d times on spawn failure, want 0", got)
+	}
+}
