@@ -46,6 +46,18 @@ func GenerateDaemonToken() (string, error) {
 	return "mdt_" + hex.EncodeToString(b), nil
 }
 
+// GenerateInstallToken creates a new single-use install token: "mit_" + 40
+// random hex chars. The raw token is shown to the user once at mint time
+// and exchanged by the daemon installer for a long-lived daemon_token.
+// See RFC MUL-2297.
+func GenerateInstallToken() (string, error) {
+	b := make([]byte, 20) // 20 bytes = 40 hex chars
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate install token: %w", err)
+	}
+	return "mit_" + hex.EncodeToString(b), nil
+}
+
 // HashToken returns the hex-encoded SHA-256 hash of a token string.
 func HashToken(token string) string {
 	h := sha256.Sum256([]byte(token))

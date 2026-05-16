@@ -219,6 +219,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
 	r.Get("/api/github/setup", h.GitHubSetupCallback)
 
+	// Install-token exchange is public — the `mit_` token in the request
+	// body IS the credential. A daemon installer hasn't been issued an
+	// `mdt_` yet, and we don't want to require a user PAT for the
+	// install-time hand-off. See handler.ExchangeInstallToken for the
+	// single-use semantics. RFC MUL-2297 Phase 1.
+	r.Post("/api/install-tokens/exchange", h.ExchangeInstallToken)
+
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache))
@@ -294,6 +301,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Delete("/", h.DeleteMember)
 					})
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
+
+					// Install-token mint — workspace admin presses "Add
+					// computer", server hands back a one-shot `mit_` to paste
+					// into a daemon installer. RFC MUL-2297 Phase 1.
+					r.Post("/install-tokens", h.CreateInstallToken)
 				})
 				// Owner-only access
 				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
