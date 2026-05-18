@@ -81,8 +81,14 @@ func TestListGroupedIssuesAssigneePaginatesPerGroup(t *testing.T) {
 		return id
 	}
 
+	// Sleep between creates so created_at is monotonically increasing and
+	// distinct. The default sort is `created_at DESC, id DESC` (MUL-2314),
+	// so without the sleeps timestamps can collide at sub-millisecond
+	// resolution and the id-tie-breaker makes the order non-deterministic.
 	createIssue("Grouped member one", "member", assigneeID, 1)
+	time.Sleep(10 * time.Millisecond)
 	createIssue("Grouped member two", "member", assigneeID, 2)
+	time.Sleep(10 * time.Millisecond)
 	createIssue("Grouped member three", "member", assigneeID, 3)
 	createIssue("Grouped agent one", "agent", agentID, 1)
 
@@ -117,7 +123,9 @@ func TestListGroupedIssuesAssigneePaginatesPerGroup(t *testing.T) {
 	if memberGroup.Total != 3 || len(memberGroup.Issues) != 2 {
 		t.Fatalf("member group total/page mismatch: total=%d len=%d", memberGroup.Total, len(memberGroup.Issues))
 	}
-	if memberGroup.Issues[0].Title != "Grouped member one" || memberGroup.Issues[1].Title != "Grouped member two" {
+	// Default sort is `created_at DESC, id DESC` (MUL-2314), so the newest
+	// issue ("three") comes first.
+	if memberGroup.Issues[0].Title != "Grouped member three" || memberGroup.Issues[1].Title != "Grouped member two" {
 		t.Fatalf("member group order mismatch: %#v", memberGroup.Issues)
 	}
 
@@ -150,7 +158,8 @@ func TestListGroupedIssuesAssigneePaginatesPerGroup(t *testing.T) {
 	if nextResp.Groups[0].ID != memberGroupID || nextResp.Groups[0].Total != 3 || len(nextResp.Groups[0].Issues) != 1 {
 		t.Fatalf("unexpected next-page group: %#v", nextResp.Groups[0])
 	}
-	if nextResp.Groups[0].Issues[0].Title != "Grouped member three" {
+	// With newest-first default sort, the third page entry is the oldest ("one").
+	if nextResp.Groups[0].Issues[0].Title != "Grouped member one" {
 		t.Fatalf("unexpected next-page issue: %#v", nextResp.Groups[0].Issues[0])
 	}
 }
