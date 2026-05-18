@@ -31,7 +31,7 @@ const FILE_CARD_MARKDOWN_RE = new RegExp(
 // React NodeView
 // ---------------------------------------------------------------------------
 
-function FileCardView({ node }: NodeViewProps) {
+export function FileCardView({ node }: NodeViewProps) {
   const href = (node.attrs.href as string) || "";
   const filename = (node.attrs.filename as string) || "";
   const uploading = node.attrs.uploading as boolean;
