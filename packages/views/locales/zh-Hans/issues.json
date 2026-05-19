@@ -76,9 +76,21 @@
   "view": {
     "tooltip_board": "看板视图",
     "tooltip_list": "列表视图",
+    "tooltip_gantt": "甘特图",
     "section": "视图",
     "board": "看板",
-    "list": "列表"
+    "list": "列表",
+    "gantt": "甘特图"
+  },
+  "gantt": {
+    "header_issue": "Issue",
+    "zoom_day": "日",
+    "zoom_week": "周",
+    "zoom_month": "月",
+    "show_completed": "显示已完成",
+    "empty": "暂无可展示的 issue。",
+    "no_scheduled": "暂无 issue 设置了开始或截止日期 — 设置后会显示在时间轴上。",
+    "unscheduled_section": "未排期 · {{count}}"
   },
   "actor_issues": {
     "scope": {

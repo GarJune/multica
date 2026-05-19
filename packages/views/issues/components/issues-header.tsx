@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  ChartGantt,
   Check,
   ChevronDown,
   CircleDot,
@@ -924,6 +925,8 @@ export function IssueDisplayControls({
                       <Button variant="outline" size="icon-sm" className="text-muted-foreground">
                         {viewMode === "board" ? (
                           <Columns3 className="size-4" />
+                        ) : viewMode === "gantt" ? (
+                          <ChartGantt className="size-4" />
                         ) : (
                           <List className="size-4" />
                         )}
@@ -933,7 +936,11 @@ export function IssueDisplayControls({
                 }
               />
               <TooltipContent side="bottom">
-                {viewMode === "board" ? t(($) => $.view.tooltip_board) : t(($) => $.view.tooltip_list)}
+                {viewMode === "board"
+                  ? t(($) => $.view.tooltip_board)
+                  : viewMode === "gantt"
+                  ? t(($) => $.view.tooltip_gantt)
+                  : t(($) => $.view.tooltip_list)}
               </TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="w-auto">
@@ -946,6 +953,10 @@ export function IssueDisplayControls({
                 <DropdownMenuItem onClick={() => act.setViewMode("list")}>
                   <List />
                   {t(($) => $.view.list)}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => act.setViewMode("gantt")}>
+                  <ChartGantt />
+                  {t(($) => $.view.gantt)}
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>

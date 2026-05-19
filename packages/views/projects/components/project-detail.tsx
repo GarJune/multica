@@ -33,6 +33,7 @@ import { ProjectResourcesSection } from "./project-resources-section";
 import { IssuesHeader } from "../../issues/components/issues-header";
 import { BoardView } from "../../issues/components/board-view";
 import { ListView } from "../../issues/components/list-view";
+import { GanttView } from "../../issues/components/gantt-view";
 import { BatchActionToolbar } from "../../issues/components/batch-action-toolbar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
@@ -185,7 +186,7 @@ function ProjectIssuesContent({
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {viewMode === "board" ? (
+      {viewMode === "board" && (
         <BoardView
           issues={assigneeGroups ? projectIssues : issues}
           assigneeGroups={assigneeGroups}
@@ -199,7 +200,8 @@ function ProjectIssuesContent({
           myIssuesFilter={filter}
           projectId={projectId}
         />
-      ) : (
+      )}
+      {viewMode === "list" && (
         <ListView
           issues={issues}
           visibleStatuses={visibleStatuses}
@@ -209,6 +211,7 @@ function ProjectIssuesContent({
           projectId={projectId}
         />
       )}
+      {viewMode === "gantt" && <GanttView issues={issues} />}
     </div>
   );
 }
