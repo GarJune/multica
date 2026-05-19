@@ -91,7 +91,10 @@
     "show_completed": "Show completed",
     "empty": "No issues to chart.",
     "no_scheduled": "No issues have a start or due date yet — set one to see it on the timeline.",
-    "unscheduled_section": "Unscheduled · {{count}}"
+    "unscheduled_section": "Unscheduled · {{count}}",
+    "pagination_warning": "{{hidden}} more issue(s) haven't been loaded — the schedule is incomplete.",
+    "load_all": "Load all",
+    "inverted_dates_warning": "Start date is after due date — bar shown from min to max."
   },
   "actor_issues": {
     "scope": {

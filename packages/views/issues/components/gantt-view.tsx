@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Info, Loader2 } from "lucide-react";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
@@ -315,6 +315,7 @@ function ScheduledRow({
   dayPx: number;
   totalDays: number;
 }) {
+  const { t } = useT("issues");
   const p = useWorkspacePaths();
   const wsId = useWorkspaceId();
   const { data: projects = [] } = useQuery({
@@ -326,18 +327,25 @@ function ScheduledRow({
   const start = parseDay(issue.start_date);
   const due = parseDay(issue.due_date);
 
+  // start > due is a data anomaly (backend only validates RFC3339, not order).
+  // Normalize to min/max so the row still draws something, and flag it so the
+  // user notices instead of seeing a silently empty row.
+  const inverted =
+    start !== null && due !== null && start.getTime() > due.getTime();
+  const rangeStart = start && due ? (inverted ? due : start) : (start ?? due);
+  const rangeEnd = start && due ? (inverted ? start : due) : (start ?? due);
+
   let bar: { left: number; width: number; isMarker: boolean } | null = null;
-  if (start && due) {
-    const s = Math.max(daysBetween(range.start, start), 0);
-    const e = Math.min(daysBetween(range.start, due) + 1, totalDays);
+  if (rangeStart && rangeEnd) {
+    const s = Math.max(daysBetween(range.start, rangeStart), 0);
+    const e = Math.min(daysBetween(range.start, rangeEnd) + 1, totalDays);
     if (e > s) {
-      bar = { left: s * dayPx, width: (e - s) * dayPx, isMarker: false };
-    }
-  } else if (start || due) {
-    const single = start ?? due!;
-    const idx = daysBetween(range.start, single);
-    if (idx >= 0 && idx < totalDays) {
-      bar = { left: idx * dayPx, width: Math.max(dayPx, 12), isMarker: true };
+      const isSingle = !start || !due;
+      if (isSingle) {
+        bar = { left: s * dayPx, width: Math.max(dayPx, 12), isMarker: true };
+      } else {
+        bar = { left: s * dayPx, width: (e - s) * dayPx, isMarker: false };
+      }
     }
   }
 
@@ -395,6 +403,7 @@ function ScheduledRow({
                         ? "h-3 w-3 rotate-45 rounded-[2px]"
                         : "h-5 rounded-md",
                       STATUS_BAR_BG[issue.status],
+                      inverted && "ring-2 ring-destructive ring-offset-1 ring-offset-background",
                     )}
                     style={{ left: bar.left, width: bar.width }}
                   >
@@ -412,6 +421,11 @@ function ScheduledRow({
                   <span className="text-muted-foreground">
                     {start ? fmt(start) : "—"} → {due ? fmt(due) : "—"}
                   </span>
+                  {inverted && (
+                    <span className="text-destructive">
+                      {t(($) => $.gantt.inverted_dates_warning)}
+                    </span>
+                  )}
                 </div>
               </TooltipContent>
             </Tooltip>
@@ -454,7 +468,27 @@ function UnscheduledRow({ issue }: { issue: Issue }) {
 // GanttView — public component
 // ---------------------------------------------------------------------------
 
-export function GanttView({ issues }: { issues: Issue[] }) {
+/**
+ * Pagination meta surfaced by the host so the Gantt can warn the user when
+ * the in-memory issue list is incomplete. Unlike Board/List, Gantt has no
+ * column-level load-more, so without this it would silently render a
+ * partial schedule.
+ */
+export interface GanttPaginationProps {
+  loaded: number;
+  total: number;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  onLoadAll: () => void | Promise<void>;
+}
+
+export function GanttView({
+  issues,
+  pagination,
+}: {
+  issues: Issue[];
+  pagination?: GanttPaginationProps;
+}) {
   const { t } = useT("issues");
   const zoom = useViewStore((s) => s.ganttZoom);
   const showCompleted = useViewStore((s) => s.ganttShowCompleted);
@@ -510,6 +544,11 @@ export function GanttView({ issues }: { issues: Issue[] }) {
     );
   }
 
+  const hiddenCount =
+    pagination && pagination.hasMore
+      ? Math.max(0, pagination.total - pagination.loaded)
+      : 0;
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Toolbar */}
@@ -547,6 +586,30 @@ export function GanttView({ issues }: { issues: Issue[] }) {
           {t(($) => $.gantt.show_completed)}
         </Button>
       </div>
+
+      {hiddenCount > 0 && pagination && (
+        <div className="flex shrink-0 items-center gap-2 border-b bg-warning/10 px-3 py-1.5 text-xs">
+          <Info className="size-3.5 shrink-0 text-warning" />
+          <span className="text-muted-foreground">
+            {t(($) => $.gantt.pagination_warning, { hidden: hiddenCount })}
+          </span>
+          <div className="flex-1" />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 text-xs"
+            disabled={pagination.isLoadingMore}
+            onClick={() => {
+              void pagination.onLoadAll();
+            }}
+          >
+            {pagination.isLoadingMore && (
+              <Loader2 className="size-3 animate-spin" />
+            )}
+            {t(($) => $.gantt.load_all)}
+          </Button>
+        </div>
+      )}
 
       {/* Body — single scroll container drives both vertical + horizontal */}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
