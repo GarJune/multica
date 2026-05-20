@@ -126,80 +126,14 @@ function KimiLogo({ className }: { className: string }) {
   );
 }
 
-// Gemini (Google) — official 4-point "spark" mark with the current
-// gemini.google.com / Gemini app "aurora" multicolor treatment: Google's
-// red / yellow / green / blue brand palette anchored at the four spark
-// points over a blue base. Approximated with four overlapping radial
-// gradients (the official asset embeds a raster JPEG, which would balloon
-// this inline SVG icon — see PR #2904 for the tradeoff).
+// Gemini (Google) — official "Google Gemini" mark from Simple Icons
+// (simpleicons.org/icons/googlegemini.svg, CC0 1.0). Rendered in the
+// Simple Icons brand color (#8E75B2), matching the pattern used by the
+// other provider marks in this file.
 function GeminiLogo({ className }: { className: string }) {
-  const uid = useId().replace(/:/g, "");
-  const clipId = `gemini-clip-${uid}`;
-  const blueId = `gemini-blue-${uid}`;
-  const redId = `gemini-red-${uid}`;
-  const yellowId = `gemini-yellow-${uid}`;
-  const greenId = `gemini-green-${uid}`;
-  // 4-point spark outline normalized from the current gemini.google.com
-  // aurora sparkle (gstatic gemini_sparkle_aurora_*.svg) into a 24x24 viewBox.
-  // Cubic-bezier sides give the characteristic smooth inset between tips
-  // instead of the earlier sharp arc-based silhouette.
-  const sparkPath =
-    "M12 0c.6 4.4 1.83 7.43 3.69 9.07C17.55 10.72 19.6 11.4 24 12c-4.4.6-6.45 1.28-8.31 2.93C13.83 16.57 12.6 19.6 12 24c-.6-4.4-1.83-7.43-3.69-9.07C6.45 13.28 4.4 12.6 0 12c4.4-.6 6.45-1.28 8.31-2.93C10.17 7.43 11.4 4.4 12 0Z";
-
   return (
-    <svg viewBox="0 0 24 24" fill="none" className={className}>
-      <defs>
-        <clipPath id={clipId}>
-          <path d={sparkPath} />
-        </clipPath>
-        <radialGradient
-          id={blueId}
-          cx="20"
-          cy="12"
-          r="18"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop offset="0" stopColor="#4285F4" />
-          <stop offset="1" stopColor="#4285F4" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient
-          id={redId}
-          cx="12"
-          cy="3"
-          r="13"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop offset="0" stopColor="#EA4335" />
-          <stop offset="1" stopColor="#EA4335" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient
-          id={yellowId}
-          cx="3"
-          cy="12"
-          r="13"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop offset="0" stopColor="#FBBC04" />
-          <stop offset="1" stopColor="#FBBC04" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient
-          id={greenId}
-          cx="12"
-          cy="21"
-          r="13"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop offset="0" stopColor="#34A853" />
-          <stop offset="1" stopColor="#34A853" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <g clipPath={`url(#${clipId})`}>
-        <rect width="24" height="24" fill="#1A73E8" />
-        <rect width="24" height="24" fill={`url(#${blueId})`} />
-        <rect width="24" height="24" fill={`url(#${redId})`} />
-        <rect width="24" height="24" fill={`url(#${yellowId})`} />
-        <rect width="24" height="24" fill={`url(#${greenId})`} />
-      </g>
+    <svg viewBox="0 0 24 24" fill="#8E75B2" className={className}>
+      <path d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81" />
     </svg>
   );
 }
