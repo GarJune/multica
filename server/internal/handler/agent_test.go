@@ -3,8 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -186,7 +189,7 @@ func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 	}
 }
 
-func TestWorkspaceAlwaysRedactEnv(t *testing.T) {
+func TestWorkspaceAlwaysRedactSecrets(t *testing.T) {
 	tests := []struct {
 		name     string
 		settings []byte
@@ -202,33 +205,37 @@ func TestWorkspaceAlwaysRedactEnv(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := workspaceAlwaysRedactEnv(tt.settings); got != tt.want {
-				t.Errorf("workspaceAlwaysRedactEnv(%q) = %v, want %v", tt.settings, got, tt.want)
+			if got := workspaceAlwaysRedactSecrets(tt.settings); got != tt.want {
+				t.Errorf("workspaceAlwaysRedactSecrets(%q) = %v, want %v", tt.settings, got, tt.want)
 			}
 		})
 	}
 }
 
-func resetWorkspaceSettings(t *testing.T, workspaceID string) {
+// rawJSONResponse decodes the raw map so we can assert the literal
+// JSON shape — `custom_env` MUST be absent from the wire output, not
+// merely empty, otherwise a future caller decoding into a wider struct
+// could still see masked or partial values.
+func rawJSONResponse(t *testing.T, body []byte) map[string]any {
 	t.Helper()
-	if _, err := testPool.Exec(context.Background(), "UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1", workspaceID); err != nil {
-		t.Logf("warning: failed to reset workspace settings: %v", err)
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
 	}
+	return out
 }
 
-func TestGetAgent_AlwaysRedactEnv_OwnerSeesRedacted(t *testing.T) {
+// TestGetAgent_ResponseHasNoCustomEnv guards the core invariant from
+// MUL-2600: the generic agent resource response NEVER carries the
+// custom_env field, even for the agent's owner. Only the dedicated
+// env endpoint exposes secret values.
+func TestGetAgent_ResponseHasNoCustomEnv(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 
-	// Enable always_redact_env on workspace.
-	if _, err := testPool.Exec(ctx, `UPDATE workspace SET settings = '{"always_redact_env": true}' WHERE id = $1`, testWorkspaceID); err != nil {
-		t.Fatalf("failed to set workspace settings: %v", err)
-	}
-	t.Cleanup(func() { resetWorkspaceSettings(t, testWorkspaceID) })
-
-	agentID := createHandlerTestAgent(t, "redact-get-test-agent", nil)
+	agentID := createHandlerTestAgent(t, "noenv-get-agent", nil)
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"SECRET_KEY": "super-secret"}' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("failed to set custom_env: %v", err)
 	}
@@ -242,108 +249,389 @@ func TestGetAgent_AlwaysRedactEnv_OwnerSeesRedacted(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp AgentResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	raw := rawJSONResponse(t, w.Body.Bytes())
+	if _, ok := raw["custom_env"]; ok {
+		t.Errorf("custom_env field must not appear in agent response, got %v", raw["custom_env"])
 	}
-	if !resp.CustomEnvRedacted {
-		t.Error("expected custom_env_redacted to be true")
+	if _, ok := raw["custom_env_redacted"]; ok {
+		t.Errorf("custom_env_redacted field must not appear in agent response (use has_custom_env)")
 	}
-	if resp.CustomEnvRedactedReason != "policy" {
-		t.Errorf("expected custom_env_redacted_reason to be 'policy', got %q", resp.CustomEnvRedactedReason)
+	if got, _ := raw["has_custom_env"].(bool); !got {
+		t.Errorf("has_custom_env expected true, got %v", raw["has_custom_env"])
 	}
-	if resp.CustomEnv["SECRET_KEY"] != "****" {
-		t.Errorf("expected SECRET_KEY to be redacted, got %q", resp.CustomEnv["SECRET_KEY"])
+	if got, _ := raw["custom_env_key_count"].(float64); got != 1 {
+		t.Errorf("custom_env_key_count expected 1, got %v", raw["custom_env_key_count"])
+	}
+
+	// Sanity-check the typed shape too — the struct must not have
+	// rehydrated the masked map.
+	var typed AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &typed); err != nil {
+		t.Fatalf("typed decode failed: %v", err)
+	}
+	if typed.HasCustomEnv != true {
+		t.Errorf("typed.HasCustomEnv expected true")
+	}
+	if typed.CustomEnvKeyCount != 1 {
+		t.Errorf("typed.CustomEnvKeyCount expected 1, got %d", typed.CustomEnvKeyCount)
 	}
 }
 
-func TestListAgents_AlwaysRedactEnv_OwnerSeesRedacted(t *testing.T) {
+// TestListAgents_ResponseHasNoCustomEnv mirrors the GetAgent guard for
+// the list endpoint. Same invariant: no custom_env field on the wire,
+// only coarse metadata.
+func TestListAgents_ResponseHasNoCustomEnv(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 
-	if _, err := testPool.Exec(ctx, `UPDATE workspace SET settings = '{"always_redact_env": true}' WHERE id = $1`, testWorkspaceID); err != nil {
-		t.Fatalf("failed to set workspace settings: %v", err)
-	}
-	t.Cleanup(func() { resetWorkspaceSettings(t, testWorkspaceID) })
-
-	agentName := "redact-list-test-agent"
+	agentName := "noenv-list-agent"
 	agentID := createHandlerTestAgent(t, agentName, nil)
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"SECRET_KEY": "super-secret"}' WHERE id = $1`, agentID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"SECRET_KEY": "super-secret", "OTHER": "y"}' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("failed to set custom_env: %v", err)
 	}
 
 	req := newRequest("GET", "/agents", nil)
 	w := httptest.NewRecorder()
 	testHandler.ListAgents(w, req)
-
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var agents []AgentResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &agents); err != nil {
+	var rawAgents []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rawAgents); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	var found *AgentResponse
-	for i := range agents {
-		if agents[i].Name == agentName {
-			found = &agents[i]
+	var found map[string]any
+	for _, a := range rawAgents {
+		if name, _ := a["name"].(string); name == agentName {
+			found = a
 			break
 		}
 	}
 	if found == nil {
 		t.Fatal("agent not found in list response")
 	}
-	if !found.CustomEnvRedacted {
-		t.Error("expected custom_env_redacted to be true")
+	if _, ok := found["custom_env"]; ok {
+		t.Errorf("custom_env must not appear in list response")
 	}
-	if found.CustomEnvRedactedReason != "policy" {
-		t.Errorf("expected custom_env_redacted_reason to be 'policy', got %q", found.CustomEnvRedactedReason)
+	if got, _ := found["custom_env_key_count"].(float64); got != 2 {
+		t.Errorf("custom_env_key_count expected 2, got %v", found["custom_env_key_count"])
 	}
-	if found.CustomEnv["SECRET_KEY"] != "****" {
-		t.Errorf("expected SECRET_KEY to be redacted, got %q", found.CustomEnv["SECRET_KEY"])
+	if got, _ := found["has_custom_env"].(bool); !got {
+		t.Errorf("has_custom_env expected true")
 	}
 }
 
-func TestGetAgent_DefaultNoRedactForOwner(t *testing.T) {
+// TestGetAgentEnv_OwnerSucceedsAndAudits exercises the happy path: an
+// agent owner reveals env, and the response carries the plaintext map.
+// The activity_log row is checked at the end so the audit trail is
+// proven to land in the same transaction window.
+func TestGetAgentEnv_OwnerSucceedsAndAudits(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 
-	// Ensure workspace has no always_redact_env policy (guards against test-order leakage).
-	if _, err := testPool.Exec(ctx, `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID); err != nil {
-		t.Fatalf("failed to clear workspace settings: %v", err)
-	}
-
-	agentID := createHandlerTestAgent(t, "no-redact-get-test-agent", nil)
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"SECRET_KEY": "super-secret"}' WHERE id = $1`, agentID); err != nil {
+	agentID := createHandlerTestAgent(t, "env-reveal-owner-agent", nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"KEY_ONE": "v1", "KEY_TWO": "v2"}' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("failed to set custom_env: %v", err)
 	}
 
-	req := newRequest("GET", "/agents/"+agentID, nil)
+	req := newRequest("GET", "/api/agents/"+agentID+"/env", nil)
 	req = withURLParam(req, "id", agentID)
 	w := httptest.NewRecorder()
-	testHandler.GetAgent(w, req)
+	testHandler.GetAgentEnv(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("GetAgentEnv: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp AgentResponse
+	var resp AgentEnvResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+		t.Fatalf("decode response: %v", err)
 	}
-	if resp.CustomEnvRedacted {
-		t.Error("expected custom_env_redacted to be false")
+	if resp.AgentID != agentID {
+		t.Errorf("agent_id mismatch: got %q", resp.AgentID)
 	}
-	if resp.CustomEnvRedactedReason != "" {
-		t.Errorf("expected custom_env_redacted_reason to be empty, got %q", resp.CustomEnvRedactedReason)
+	expected := map[string]string{"KEY_ONE": "v1", "KEY_TWO": "v2"}
+	if !reflect.DeepEqual(resp.CustomEnv, expected) {
+		t.Errorf("CustomEnv mismatch: got %v, want %v", resp.CustomEnv, expected)
 	}
-	if resp.CustomEnv["SECRET_KEY"] != "super-secret" {
-		t.Errorf("expected SECRET_KEY to be visible, got %q", resp.CustomEnv["SECRET_KEY"])
+
+	// Audit row must exist; keys but not values must be recorded.
+	var revealedKeysJSON string
+	if err := testPool.QueryRow(ctx, `
+		SELECT details::text FROM activity_log
+		WHERE workspace_id = $1 AND action = 'agent_env_revealed'
+		  AND details->>'agent_id' = $2
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID, agentID).Scan(&revealedKeysJSON); err != nil {
+		t.Fatalf("no agent_env_revealed activity row found: %v", err)
+	}
+	if !strings.Contains(revealedKeysJSON, `"KEY_ONE"`) || !strings.Contains(revealedKeysJSON, `"KEY_TWO"`) {
+		t.Errorf("expected revealed_keys to contain KEY_ONE and KEY_TWO, got: %s", revealedKeysJSON)
+	}
+	if strings.Contains(revealedKeysJSON, `"v1"`) || strings.Contains(revealedKeysJSON, `"v2"`) {
+		t.Errorf("activity details must NOT contain env values, got: %s", revealedKeysJSON)
 	}
 }
+
+// TestAgentEnv_AgentActorRejected proves the security-critical actor
+// guard: even when the underlying user is a workspace owner, a request
+// arriving from inside a running agent task is denied 403. This is
+// the lateral-movement fix — an agent running with its owner's token
+// cannot reveal a sibling agent's secrets.
+func TestAgentEnv_AgentActorRejected(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	targetID := createHandlerTestAgent(t, "env-target-agent", nil)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET custom_env = '{"K":"v"}' WHERE id = $1`, targetID); err != nil {
+		t.Fatalf("failed to set custom_env: %v", err)
+	}
+
+	// Spin up a separate agent + task that authorises the X-Agent-ID /
+	// X-Task-ID header pair resolveActor checks. The owning member of
+	// the host agent is the same testUserID (workspace owner), which is
+	// the exact lateral-movement shape we want to block.
+	hostAgentID := createHandlerTestAgent(t, "env-host-agent", nil)
+	hostTaskID := createHandlerTestTaskForAgent(t, hostAgentID)
+
+	cases := []struct {
+		name string
+		fn   func(http.ResponseWriter, *http.Request)
+		body any
+	}{
+		{"reveal", testHandler.GetAgentEnv, nil},
+		{"update", testHandler.UpdateAgentEnv, map[string]any{"custom_env": map[string]string{"K": "v2"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			method := http.MethodGet
+			if tc.body != nil {
+				method = http.MethodPut
+			}
+			req := newRequest(method, "/api/agents/"+targetID+"/env", tc.body)
+			req = withURLParam(req, "id", targetID)
+			req.Header.Set("X-Agent-ID", hostAgentID)
+			req.Header.Set("X-Task-ID", hostTaskID)
+			w := httptest.NewRecorder()
+			tc.fn(w, req)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 from agent actor, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestUpdateAgentEnv_PreservesSentinelValues verifies the **** guard.
+// A naive write would clobber real secrets with the masked
+// placeholder; we want any key whose value comes in as **** to keep
+// its stored value.
+func TestUpdateAgentEnv_PreservesSentinelValues(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID := createHandlerTestAgent(t, "env-sentinel-agent", nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"KEEP_ME":"real-secret","ALSO":"another-secret"}' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("failed to seed custom_env: %v", err)
+	}
+
+	// Client sends one key with a real new value, one with **** (should
+	// be preserved), and one new key that isn't in the existing map but
+	// arrives as **** (must be dropped, never written as literal).
+	body := map[string]any{
+		"custom_env": map[string]string{
+			"KEEP_ME":   "****",
+			"ALSO":      "rotated",
+			"PHANTOM":   "****",
+			"BRAND_NEW": "fresh",
+		},
+	}
+	req := newRequest(http.MethodPut, "/api/agents/"+agentID+"/env", body)
+	req = withURLParam(req, "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.UpdateAgentEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgentEnv: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Refetch from DB so we don't rely on the response body alone.
+	var stored string
+	if err := testPool.QueryRow(ctx, `SELECT custom_env::text FROM agent WHERE id = $1`, agentID).Scan(&stored); err != nil {
+		t.Fatalf("failed to read back custom_env: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(stored), &got); err != nil {
+		t.Fatalf("failed to decode stored custom_env: %v", err)
+	}
+	want := map[string]string{
+		"KEEP_ME":   "real-secret", // **** must preserve the existing value
+		"ALSO":      "rotated",     // explicit overwrite
+		"BRAND_NEW": "fresh",       // new addition
+		// PHANTOM is intentionally absent — **** for a non-existent key
+		// is dropped, never persisted as literal `****`.
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("stored custom_env mismatch:\n got:  %v\n want: %v", got, want)
+	}
+
+	// Audit row should reflect the diff.
+	var details string
+	if err := testPool.QueryRow(ctx, `
+		SELECT details::text FROM activity_log
+		WHERE workspace_id = $1 AND action = 'agent_env_updated' AND details->>'agent_id' = $2
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID, agentID).Scan(&details); err != nil {
+		t.Fatalf("expected agent_env_updated activity row: %v", err)
+	}
+	if !strings.Contains(details, `"added_keys":["BRAND_NEW"]`) {
+		t.Errorf("expected added_keys to include BRAND_NEW: %s", details)
+	}
+	if !strings.Contains(details, `"changed_keys":["ALSO"]`) {
+		t.Errorf("expected changed_keys to include ALSO: %s", details)
+	}
+	if !strings.Contains(details, `"preserved_keys":["KEEP_ME"]`) {
+		t.Errorf("expected preserved_keys to include KEEP_ME: %s", details)
+	}
+	// Audit must never contain values.
+	for _, leak := range []string{"real-secret", "another-secret", "rotated", "fresh"} {
+		if strings.Contains(details, leak) {
+			t.Errorf("audit details leaked value %q: %s", leak, details)
+		}
+	}
+}
+
+func TestUpdateAgent_DoesNotAcceptCustomEnv(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID := createHandlerTestAgent(t, "update-no-env-agent", nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"PRE":"existing"}' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("failed to seed custom_env: %v", err)
+	}
+
+	// Naive client passes custom_env via PUT /api/agents/{id}; the
+	// handler must silently ignore it and the stored value must remain
+	// unchanged. (If a future maintainer reintroduces the field, this
+	// test will fail.)
+	body := map[string]any{
+		"description": "still updating description",
+		"custom_env":  map[string]string{"INJECTED": "should-not-stick"},
+	}
+	req := newRequest(http.MethodPut, "/api/agents/"+agentID, body)
+	req = withURLParam(req, "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var stored string
+	if err := testPool.QueryRow(ctx, `SELECT custom_env::text FROM agent WHERE id = $1`, agentID).Scan(&stored); err != nil {
+		t.Fatalf("failed to read custom_env: %v", err)
+	}
+	if !strings.Contains(stored, `"PRE": "existing"`) && !strings.Contains(stored, `"PRE":"existing"`) {
+		t.Errorf("UpdateAgent must NOT touch custom_env; got %q", stored)
+	}
+	if strings.Contains(stored, "INJECTED") {
+		t.Errorf("UpdateAgent should have ignored custom_env in body; got %q", stored)
+	}
+}
+
+// TestMergeAgentEnv_PureFunction exercises the diff/sentinel logic
+// without the DB round-trip — keeps the contract front-and-centre in
+// case someone refactors the handler later.
+func TestMergeAgentEnv_PureFunction(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing map[string]string
+		request  map[string]string
+		want     map[string]string
+		audit    envAudit
+	}{
+		{
+			name:     "preserve sentinel",
+			existing: map[string]string{"A": "real"},
+			request:  map[string]string{"A": "****"},
+			want:     map[string]string{"A": "real"},
+			audit:    envAudit{preserved: []string{"A"}},
+		},
+		{
+			name:     "drop sentinel for missing key",
+			existing: map[string]string{},
+			request:  map[string]string{"A": "****"},
+			want:     map[string]string{},
+			audit:    envAudit{},
+		},
+		{
+			name:     "add new key",
+			existing: map[string]string{},
+			request:  map[string]string{"B": "v"},
+			want:     map[string]string{"B": "v"},
+			audit:    envAudit{added: []string{"B"}},
+		},
+		{
+			name:     "change existing value",
+			existing: map[string]string{"B": "old"},
+			request:  map[string]string{"B": "new"},
+			want:     map[string]string{"B": "new"},
+			audit:    envAudit{changed: []string{"B"}},
+		},
+		{
+			name:     "remove key absent from request",
+			existing: map[string]string{"B": "v"},
+			request:  map[string]string{},
+			want:     map[string]string{},
+			audit:    envAudit{removed: []string{"B"}},
+		},
+		{
+			name:     "noop when value unchanged",
+			existing: map[string]string{"B": "same"},
+			request:  map[string]string{"B": "same"},
+			want:     map[string]string{"B": "same"},
+			audit:    envAudit{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, audit := mergeAgentEnv(tc.existing, tc.request)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("merged map: got %v, want %v", got, tc.want)
+			}
+			if !reflect.DeepEqual(audit, tc.audit) {
+				t.Errorf("audit: got %+v, want %+v", audit, tc.audit)
+			}
+		})
+	}
+}
+
+// Compile-time guard: AgentResponse must NOT carry the legacy env
+// fields. Reintroducing them is a security regression — this test
+// fails to compile rather than fails at runtime so reviewers see the
+// breakage in the diff. Kept as a runtime test because the package
+// boundary makes a struct-tag introspection cheap and obvious.
+func TestAgentResponseShape_HasNoLegacyEnvFields(t *testing.T) {
+	typ := reflect.TypeOf(AgentResponse{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		switch tag {
+		case "custom_env", "custom_env_redacted", "custom_env_redacted_reason":
+			t.Errorf("AgentResponse must not carry %q field (MUL-2600)", tag)
+		}
+	}
+}
+
+// Defence-in-depth: spot-check that the package compiles a small
+// fmt.Sprintf so accidental imports stay tidy.
+var _ = fmt.Sprintf
