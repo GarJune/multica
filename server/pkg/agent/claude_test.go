@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -823,7 +824,7 @@ func TestNewIsolatedClaudeConfigDirCreatesAndCleansUp(t *testing.T) {
 	t.Parallel()
 
 	parent := t.TempDir()
-	dir, cleanup, err := newIsolatedClaudeConfigDir(parent)
+	dir, cleanup, err := newIsolatedClaudeConfigDir(parent, "", slog.Default())
 	if err != nil {
 		t.Fatalf("newIsolatedClaudeConfigDir: %v", err)
 	}
@@ -894,17 +895,16 @@ func TestMirrorHostClaudeExceptSkills_PassesAuthAndSkipsSkills(t *testing.T) {
 		t.Fatalf("expected skills/ to be skipped, got stat err=%v", err)
 	}
 
-	// Everything else must reach the isolated dir as a symlink with the
-	// same contents as the host file. We resolve through the symlink to
-	// confirm the CLI sees real bytes, not a broken link.
+	// Everything else must reach the isolated dir with the same contents as
+	// the host source. We resolve through the mirrored entry to confirm the
+	// CLI sees real bytes whether the implementation used a symlink (Unix),
+	// a junction (Windows), a hardlink (Windows no Developer Mode, same
+	// volume), or a content copy (last-resort fallback). os.Stat follows
+	// every variant, so the assertion is platform-agnostic.
 	for _, expected := range []string{".credentials.json", "settings.json", "agents", "commands", "plugins"} {
 		dst := filepath.Join(dest, expected)
-		info, err := os.Lstat(dst)
-		if err != nil {
-			t.Fatalf("expected %s mirrored, stat err=%v", expected, err)
-		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("expected %s to be a symlink, got mode %v", expected, info.Mode())
+		if _, err := os.Stat(dst); err != nil {
+			t.Fatalf("expected %s mirrored and reachable, stat err=%v", expected, err)
 		}
 	}
 
@@ -941,7 +941,7 @@ func TestNewIsolatedClaudeConfigDirFallsBackToTemp(t *testing.T) {
 	t.Parallel()
 
 	// Empty cwd → falls back to OS temp dir without erroring.
-	dir, cleanup, err := newIsolatedClaudeConfigDir("")
+	dir, cleanup, err := newIsolatedClaudeConfigDir("", "", slog.Default())
 	if err != nil {
 		t.Fatalf("expected fallback to OS temp, got err=%v", err)
 	}
@@ -972,5 +972,340 @@ func TestBuildClaudeArgsExtraArgsBeforeCustomArgsAndFiltersBoth(t *testing.T) {
 	}
 	if extraIdx == -1 || customIdx == -1 || extraIdx > customIdx {
 		t.Fatalf("expected extra args before custom args, got %v", args)
+	}
+}
+
+// TestResolveHostClaudeConfigDir locks in the precedence Elon's review asked
+// for: agent custom_env wins over a daemon-host CLAUDE_CONFIG_DIR, which
+// wins over the documented default at `~/.claude`. Without this, switching
+// default mode to "ignore" would mirror the wrong source dir and overwrite
+// a valid CLAUDE_CONFIG_DIR pointing at e.g. a managed shared profile.
+func TestResolveHostClaudeConfigDir(t *testing.T) {
+	// NOT parallel — t.Setenv mutates global env which conflicts with
+	// concurrent tests reading CLAUDE_CONFIG_DIR.
+
+	// 1. Agent custom_env wins over parent env.
+	t.Setenv("CLAUDE_CONFIG_DIR", "/from/parent/env")
+	got := resolveHostClaudeConfigDir(map[string]string{"CLAUDE_CONFIG_DIR": "/from/custom/env"})
+	if got != "/from/custom/env" {
+		t.Fatalf("agent custom_env should win, got %q", got)
+	}
+
+	// 2. Empty custom_env falls back to parent env.
+	got = resolveHostClaudeConfigDir(map[string]string{"CLAUDE_CONFIG_DIR": ""})
+	if got != "/from/parent/env" {
+		t.Fatalf("parent env should win when custom_env is empty, got %q", got)
+	}
+	got = resolveHostClaudeConfigDir(nil)
+	if got != "/from/parent/env" {
+		t.Fatalf("parent env should win when custom_env is nil, got %q", got)
+	}
+
+	// 3. With neither set, falls back to `~/.claude`.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	got = resolveHostClaudeConfigDir(nil)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no UserHomeDir on this host: %v", err)
+	}
+	want := filepath.Join(home, ".claude")
+	if got != want {
+		t.Fatalf("default should be %q, got %q", want, got)
+	}
+}
+
+// TestNewIsolatedClaudeConfigDirMirrorsCustomHostDir confirms the scratch
+// dir reflects the effective CLAUDE_CONFIG_DIR source, not unconditionally
+// `~/.claude/`. Previously the mirror was hardcoded to UserHomeDir, so an
+// operator who pinned CLAUDE_CONFIG_DIR at a managed install would get the
+// wrong credentials in the scratch dir.
+func TestNewIsolatedClaudeConfigDirMirrorsCustomHostDir(t *testing.T) {
+	t.Parallel()
+
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, ".credentials.json"), []byte(`{"token":"from-custom-host"}`), 0o600); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+
+	dir, cleanup, err := newIsolatedClaudeConfigDir(t.TempDir(), host, slog.Default())
+	if err != nil {
+		t.Fatalf("newIsolatedClaudeConfigDir: %v", err)
+	}
+	defer cleanup()
+
+	got, err := os.ReadFile(filepath.Join(dir, ".credentials.json"))
+	if err != nil {
+		t.Fatalf("read mirrored credentials from custom host: %v", err)
+	}
+	if string(got) != `{"token":"from-custom-host"}` {
+		t.Fatalf("mirror sourced from wrong dir: got %q", got)
+	}
+}
+
+// TestNewIsolatedClaudeConfigDirEmptyHostIsNoop documents the env-var-auth
+// case: with no host config dir (host has no `~/.claude/` and no
+// CLAUDE_CONFIG_DIR set anywhere), the scratch dir is created but empty and
+// nothing is mirrored. The CLI runs with `ANTHROPIC_API_KEY` only.
+func TestNewIsolatedClaudeConfigDirEmptyHostIsNoop(t *testing.T) {
+	t.Parallel()
+
+	dir, cleanup, err := newIsolatedClaudeConfigDir(t.TempDir(), "", slog.Default())
+	if err != nil {
+		t.Fatalf("newIsolatedClaudeConfigDir: %v", err)
+	}
+	defer cleanup()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read scratch dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty scratch dir with no host source, got %d entries", len(entries))
+	}
+}
+
+// TestMirrorHostClaudeExceptSkillsWith_FallbackWhenSymlinkFails locks in the
+// Windows-no-Developer-Mode behaviour Elon's review asked for: when symlink
+// raises a permission error, the mirror still places the entry in the
+// scratch dir via a fallback (junction for dirs, hardlink/copy for files).
+// Tested via the lower-level seam so the assertion runs on Linux/macOS CI;
+// the production createDirLink / createFileLink wrappers encode the same
+// "try symlink first, then fall back" chain in their platform builds.
+func TestMirrorHostClaudeExceptSkillsWith_FallbackWhenSymlinkFails(t *testing.T) {
+	t.Parallel()
+
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, ".credentials.json"), []byte(`{"token":"fallback"}`), 0o600); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(host, "agents"), 0o755); err != nil {
+		t.Fatalf("seed agents dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(host, "agents", "global.md"), []byte("global agent"), 0o600); err != nil {
+		t.Fatalf("seed agent file: %v", err)
+	}
+	// `skills/` must still be skipped even when the linker reports an
+	// error — the broken-skill GitHub #3052 regression must not slip back.
+	if err := os.MkdirAll(filepath.Join(host, "skills"), 0o755); err != nil {
+		t.Fatalf("seed skills dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(host, "skills", "broken.md"), []byte("frontmatter-corrupt"), 0o600); err != nil {
+		t.Fatalf("seed broken skill: %v", err)
+	}
+
+	dest := t.TempDir()
+
+	// Simulated "Windows without Developer Mode": symlink always returns
+	// EPERM. The fallback path must still land the entry in dest.
+	failedSymlinkAttempts := 0
+	fakeSymlinkErr := errors.New("simulated EPERM: symlink not permitted")
+	dirLink := func(src, dst string) error {
+		if err := os.Symlink(src, dst); err == nil {
+			// Forcing failure: if a symlink would have worked, pretend it
+			// didn't and engage the junction equivalent. We mimic the
+			// junction by using os.MkdirAll (a junction behaves like a
+			// directory entry from userspace) and copying the immediate
+			// child files into it. For the test we only need the entry to
+			// exist and be reachable; we do not need real recursive
+			// equivalence.
+			_ = os.Remove(dst)
+		}
+		failedSymlinkAttempts++
+		_ = fakeSymlinkErr // referenced so the simulated-EPERM error is documented in the test body
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			return err
+		}
+		// Copy any direct children so the destination is non-empty and
+		// the test can read through it.
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			data, err := os.ReadFile(filepath.Join(src, e.Name()))
+			if err != nil {
+				continue
+			}
+			_ = os.WriteFile(filepath.Join(dst, e.Name()), data, 0o600)
+		}
+		return nil
+	}
+	fileLink := func(src, dst string) error {
+		if err := os.Symlink(src, dst); err == nil {
+			_ = os.Remove(dst)
+		}
+		failedSymlinkAttempts++
+		// Hardlink fallback first (this is what createFileLink does on
+		// Windows when symlink is denied but the source/dest share a
+		// volume). If hardlink also fails (e.g. cross-volume), fall back
+		// to a content copy.
+		if err := os.Link(src, dst); err == nil {
+			return nil
+		}
+		return copyFile(src, dst)
+	}
+
+	if err := mirrorHostClaudeExceptSkillsWith(host, dest, dirLink, fileLink); err != nil {
+		t.Fatalf("mirror with failing symlink: %v", err)
+	}
+
+	if failedSymlinkAttempts == 0 {
+		t.Fatalf("expected fallback path to engage at least once")
+	}
+
+	// `.credentials.json` must round-trip through whatever fallback the
+	// file linker used (hardlink or copy). This is the assertion Elon's
+	// review pinned to "no `.credentials.json` ⇒ default ignore breaks
+	// Claude Code auth on Windows".
+	got, err := os.ReadFile(filepath.Join(dest, ".credentials.json"))
+	if err != nil {
+		t.Fatalf("read mirrored credentials after fallback: %v", err)
+	}
+	if string(got) != `{"token":"fallback"}` {
+		t.Fatalf("mirrored credentials drifted after fallback, got %q", got)
+	}
+
+	// Sub-directories must also reach the destination via the dir
+	// fallback (junction equivalent). We test reachability + child
+	// content rather than the underlying file kind, because junctions,
+	// symlinks, and the test's copy-based stand-in all present the same
+	// userspace view.
+	if _, err := os.Stat(filepath.Join(dest, "agents")); err != nil {
+		t.Fatalf("agents/ not mirrored: %v", err)
+	}
+	gotChild, err := os.ReadFile(filepath.Join(dest, "agents", "global.md"))
+	if err != nil {
+		t.Fatalf("read agent child file: %v", err)
+	}
+	if string(gotChild) != "global agent" {
+		t.Fatalf("agent child content drifted, got %q", gotChild)
+	}
+
+	// `skills/` must be absent regardless of fallback engagement.
+	if _, err := os.Lstat(filepath.Join(dest, "skills")); !os.IsNotExist(err) {
+		t.Fatalf("skills/ leaked into scratch dir on fallback path, stat err=%v", err)
+	}
+}
+
+// TestMirrorHostClaudeExceptSkillsWith_PropagatesFirstLinkError makes sure
+// callers see a per-entry link failure when even the fallback fails — the
+// scratch-dir caller logs the error so operators chasing auth issues on
+// Windows can correlate the missing mirror with their permission setup.
+func TestMirrorHostClaudeExceptSkillsWith_PropagatesFirstLinkError(t *testing.T) {
+	t.Parallel()
+
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, ".credentials.json"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+
+	hardFail := errors.New("link refused after fallback")
+	fail := func(src, dst string) error { return hardFail }
+
+	err := mirrorHostClaudeExceptSkillsWith(host, t.TempDir(), fail, fail)
+	if err == nil {
+		t.Fatal("expected an error when every linker fails")
+	}
+	if !errors.Is(err, hardFail) {
+		t.Fatalf("expected wrapped hardFail, got %v", err)
+	}
+}
+
+// TestCopyFileRoundTrip exercises the last-resort content-copy fallback used
+// by createFileLink on Windows when both symlink and hardlink are
+// unavailable (e.g. cross-volume scratch dir). The copy must produce a
+// byte-for-byte equivalent destination so Claude Code reads the real
+// credential bytes.
+func TestCopyFileRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	src := filepath.Join(t.TempDir(), "creds")
+	if err := os.WriteFile(src, []byte(`{"token":"abc"}`), 0o600); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	dst := filepath.Join(t.TempDir(), "creds-copy")
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read copy: %v", err)
+	}
+	if string(got) != `{"token":"abc"}` {
+		t.Fatalf("copy drifted, got %q", got)
+	}
+	// EXCL semantics — copyFile refuses to overwrite an existing file so
+	// a stale mirror entry never silently shadows a fresh source.
+	if err := copyFile(src, dst); err == nil {
+		t.Fatal("expected copyFile to refuse overwriting existing dst")
+	}
+}
+
+// TestClaudeExecuteIsolatesUsesCustomEnvSource confirms the runtime mirrors
+// from the agent's custom_env CLAUDE_CONFIG_DIR — the exact bug Elon's
+// review flagged: when an operator pins CLAUDE_CONFIG_DIR via custom_env,
+// the scratch dir must mirror *that* source, not `~/.claude`. Otherwise
+// default `ignore` mode would silently load the wrong credentials.
+func TestClaudeExecuteIsolatesUsesCustomEnvSource(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	// Build a synthetic "host Claude config dir" the agent will pin via
+	// custom_env. The mirror should land its `.credentials.json` in the
+	// scratch dir. The token value is a plain quote-free string so the
+	// fake-claude shell script can echo it through stream-json's `result`
+	// field without escape gymnastics.
+	customHost := t.TempDir()
+	const expectedToken = "from-custom-host-token-ok"
+	if err := os.WriteFile(filepath.Join(customHost, ".credentials.json"), []byte(expectedToken), 0o600); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+
+	// Fake claude binary that prints the mirrored credentials content from
+	// the scratch CLAUDE_CONFIG_DIR — we then assert that we see the
+	// custom host's token, not whatever lives in real `~/.claude/`.
+	fakePath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
+		"creds=$(cat \"$CLAUDE_CONFIG_DIR/.credentials.json\" 2>/dev/null || echo MISSING)\n" +
+		"printf '%s\\n' \"{\\\"type\\\":\\\"system\\\",\\\"session_id\\\":\\\"sess\\\"}\"\n" +
+		"printf '%s\\n' \"{\\\"type\\\":\\\"result\\\",\\\"subtype\\\":\\\"success\\\",\\\"is_error\\\":false,\\\"session_id\\\":\\\"sess\\\",\\\"result\\\":\\\"$creds\\\"}\"\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("claude", Config{
+		ExecutablePath: fakePath,
+		Logger:         slog.Default(),
+		Env:            map[string]string{"CLAUDE_CONFIG_DIR": customHost},
+	})
+	if err != nil {
+		t.Fatalf("new claude backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Default SkillsLocal → ignore → backend builds scratch dir mirrored
+	// from custom_env CLAUDE_CONFIG_DIR.
+	session, err := backend.Execute(ctx, "ignored", ExecOptions{Cwd: t.TempDir(), Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result := <-session.Result:
+		if result.Status != "completed" {
+			t.Fatalf("expected completed, got %q (err=%q)", result.Status, result.Error)
+		}
+		got := strings.TrimSpace(result.Output)
+		if got != expectedToken {
+			t.Fatalf("expected credentials mirrored from custom CLAUDE_CONFIG_DIR, got %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
 	}
 }
