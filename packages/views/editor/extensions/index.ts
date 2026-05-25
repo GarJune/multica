@@ -118,6 +118,17 @@ export function createEditorExtensions(
       addNodeView() {
         return ReactNodeViewRenderer(CodeBlockView);
       },
+      addKeyboardShortcuts() {
+        const parentShortcuts = this.parent?.();
+        return {
+          ...parentShortcuts,
+          Enter: ({ editor }) => {
+            if (!editor.isActive("codeBlock")) return false;
+            if (parentShortcuts?.Enter?.({ editor })) return true;
+            return editor.commands.newlineInCode();
+          },
+        };
+      },
     }).configure({ lowlight }),
     // ⚠️ Link MUST appear before markdownPaste in this array.
     // linkOnPaste relies on Link's handlePaste plugin firing first;

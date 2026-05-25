@@ -217,8 +217,10 @@ function buildComponents(): Partial<Components> {
     code: ({ className, children, node, ...props }) => {
       const lang = /language-(\w+)/.exec(className || "")?.[1];
       const isBlock =
-        node?.position &&
-        node.position.start.line !== node.position.end.line;
+        Boolean(lang) ||
+        (node?.position != null &&
+          node.position.start.line !== node.position.end.line) ||
+        String(children).endsWith("\n");
 
       if (isBlock && lang === "mermaid") {
         return <MermaidDiagram chart={String(children).replace(/\n$/, "")} />;
@@ -242,20 +244,23 @@ function buildComponents(): Partial<Components> {
         const tree = lang
           ? lowlight.highlight(lang, code)
           : lowlight.highlightAuto(code);
-        return (
-          <code
-            className={cn("hljs", lang && `language-${lang}`)}
-            dangerouslySetInnerHTML={{ __html: toHtml(tree) }}
-          />
-        );
+        const html = toHtml(tree);
+        if (html) {
+          return (
+            <code
+              className={cn("hljs", lang && `language-${lang}`)}
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          );
+        }
       } catch {
-        // Fallback — render without highlighting
-        return (
-          <code className={className} {...props}>
-            {children}
-          </code>
-        );
+        // lowlight threw — fall through to plain-text render below
       }
+      return (
+        <code className={cn("hljs", lang && `language-${lang}`)} {...props}>
+          {code}
+        </code>
+      );
     },
 
     // Pre — pass through (CSS handles styling via .rich-text-editor pre).

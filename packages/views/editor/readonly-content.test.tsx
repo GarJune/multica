@@ -266,6 +266,40 @@ describe("ReadonlyContent HTML block rendering", () => {
   });
 });
 
+describe("ReadonlyContent fenced code block rendering", () => {
+  it("renders no-language fenced code block with visible text", () => {
+    const { container } = render(
+      <ReadonlyContent content={["```", "ok", "```"].join("\n")} />,
+    );
+
+    const code = container.querySelector("pre code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("ok");
+  });
+
+  it("renders short single-word content in a no-language fenced code block", () => {
+    const { container } = render(
+      <ReadonlyContent content={["```", "x", "```"].join("\n")} />,
+    );
+
+    const code = container.querySelector("pre code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("x");
+  });
+
+  it("does not regress language-tagged fenced code blocks", () => {
+    const { container } = render(
+      <ReadonlyContent
+        content={["```js", 'console.log("hi")', "```"].join("\n")}
+      />,
+    );
+
+    const code = container.querySelector("pre code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toContain("console");
+  });
+});
+
 describe("ReadonlyContent file-card → AttachmentBlock HTML routing", () => {
   // Regression pin for readonly-content.tsx:279. The `div data-type=fileCard`
   // branch must render through <AttachmentBlock>, not the older
