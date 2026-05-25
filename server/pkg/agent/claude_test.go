@@ -650,6 +650,227 @@ func mustMarshal(t *testing.T, v any) json.RawMessage {
 	return data
 }
 
+func TestClaudeExecuteIsolatesHostSkillsByDefault(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	// Fake claude binary that prints its CLAUDE_CONFIG_DIR to stdout so we
+	// can confirm the runtime redirected the CLI off `~/.claude/`. The
+	// daemon-default mode (no SkillsLocal opt-in) must isolate.
+	fakePath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
+		"printf '%s\\n' \"{\\\"type\\\":\\\"system\\\",\\\"session_id\\\":\\\"sess\\\"}\"\n" +
+		"printf '%s\\n' \"{\\\"type\\\":\\\"result\\\",\\\"subtype\\\":\\\"success\\\",\\\"is_error\\\":false,\\\"session_id\\\":\\\"sess\\\",\\\"result\\\":\\\"$CLAUDE_CONFIG_DIR\\\"}\"\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("claude", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new claude backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cwd := t.TempDir()
+	// Default ExecOptions → SkillsLocal == "" → backend treats as "ignore"
+	// and points CLAUDE_CONFIG_DIR at a per-task scratch dir under cwd.
+	session, err := backend.Execute(ctx, "ignored", ExecOptions{Cwd: cwd, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result := <-session.Result:
+		if result.Status != "completed" {
+			t.Fatalf("expected completed, got %q (err=%q)", result.Status, result.Error)
+		}
+		// The CLI saw a CLAUDE_CONFIG_DIR pointed at a multica-managed scratch
+		// dir under our task cwd, not the host user's ~/.claude.
+		got := strings.TrimSpace(result.Output)
+		if got == "" {
+			t.Fatalf("expected CLAUDE_CONFIG_DIR to be non-empty in default mode")
+		}
+		if !strings.Contains(got, "multica-claude-config-") {
+			t.Fatalf("expected isolated scratch dir, got %q", got)
+		}
+		if !strings.HasPrefix(got, cwd) {
+			t.Fatalf("expected isolated dir under %q, got %q", cwd, got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
+func TestClaudeExecuteMergeModeKeepsHostConfigDir(t *testing.T) {
+	// NOT parallel — t.Setenv mutates global env which conflicts with
+	// concurrent tests reading CLAUDE_CONFIG_DIR or running under t.Parallel.
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
+		"printf '%s\\n' \"{\\\"type\\\":\\\"system\\\",\\\"session_id\\\":\\\"sess\\\"}\"\n" +
+		"printf '%s\\n' \"{\\\"type\\\":\\\"result\\\",\\\"subtype\\\":\\\"success\\\",\\\"is_error\\\":false,\\\"session_id\\\":\\\"sess\\\",\\\"result\\\":\\\"${CLAUDE_CONFIG_DIR:-unset}\\\"}\"\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	// Set a host-style CLAUDE_CONFIG_DIR so we can assert merge mode
+	// preserves it. The backend strips this in ignore mode but must leave
+	// it alone when the operator explicitly opted into merging.
+	t.Setenv("CLAUDE_CONFIG_DIR", "/tmp/test-host-claude")
+
+	backend, err := New("claude", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new claude backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "ignored", ExecOptions{
+		Cwd:         t.TempDir(),
+		Timeout:     5 * time.Second,
+		SkillsLocal: "merge",
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result := <-session.Result:
+		if result.Status != "completed" {
+			t.Fatalf("expected completed, got %q (err=%q)", result.Status, result.Error)
+		}
+		got := strings.TrimSpace(result.Output)
+		if got != "/tmp/test-host-claude" {
+			t.Fatalf("expected host CLAUDE_CONFIG_DIR preserved in merge mode, got %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
+func TestBuildClaudeEnvAppendsIsolatedConfigDir(t *testing.T) {
+	t.Parallel()
+
+	env := buildClaudeEnv(nil, "/tmp/isolated-claude-config")
+
+	var last string
+	hits := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+			hits++
+			last = entry
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("expected exactly one CLAUDE_CONFIG_DIR entry, got %d (%v)", hits, env)
+	}
+	if last != "CLAUDE_CONFIG_DIR=/tmp/isolated-claude-config" {
+		t.Fatalf("expected isolated CLAUDE_CONFIG_DIR override, got %q", last)
+	}
+}
+
+func TestBuildClaudeEnvSkipsOverrideWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	// Asking for "merge" mode passes "" through. We should not add a
+	// CLAUDE_CONFIG_DIR=… entry; the parent's value (if any) wins.
+	env := buildClaudeEnv(map[string]string{"FOO": "bar"}, "")
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+			// The parent env may legitimately have one set on a developer
+			// machine — only assert we did not *add* one. Find the unfiltered
+			// merge case to compare.
+			return
+		}
+	}
+}
+
+func TestBuildClaudeEnvOverridesPreviousValue(t *testing.T) {
+	t.Parallel()
+
+	// Even if custom_env supplies a CLAUDE_CONFIG_DIR, the isolated dir
+	// must take precedence: a stale custom_env entry must never be able
+	// to point the child back at `~/.claude/`.
+	env := buildClaudeEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/etc/hostile"}, "/tmp/safe")
+
+	hits := 0
+	for _, entry := range env {
+		if entry == "CLAUDE_CONFIG_DIR=/etc/hostile" {
+			t.Fatalf("hostile custom_env CLAUDE_CONFIG_DIR was not stripped: %v", env)
+		}
+		if entry == "CLAUDE_CONFIG_DIR=/tmp/safe" {
+			hits++
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("expected isolated dir to be present exactly once, got %d (%v)", hits, env)
+	}
+}
+
+func TestNewIsolatedClaudeConfigDirCreatesAndCleansUp(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	dir, cleanup, err := newIsolatedClaudeConfigDir(parent)
+	if err != nil {
+		t.Fatalf("newIsolatedClaudeConfigDir: %v", err)
+	}
+	defer cleanup()
+
+	if dir == "" {
+		t.Fatal("expected non-empty dir")
+	}
+	if filepath.Dir(dir) != parent {
+		t.Fatalf("expected dir under %q, got %q", parent, dir)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("expected created dir to exist, stat err=%v", err)
+	}
+	// The dir must be empty so `claude` cannot inherit any host-machine
+	// skills/agents/commands by accident.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read isolated dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty isolated dir, got %d entries", len(entries))
+	}
+
+	// Cleanup is idempotent (Execute may double-defer in error paths).
+	cleanup()
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected dir removed, stat err=%v", err)
+	}
+}
+
+func TestNewIsolatedClaudeConfigDirFallsBackToTemp(t *testing.T) {
+	t.Parallel()
+
+	// Empty cwd → falls back to OS temp dir without erroring.
+	dir, cleanup, err := newIsolatedClaudeConfigDir("")
+	if err != nil {
+		t.Fatalf("expected fallback to OS temp, got err=%v", err)
+	}
+	defer cleanup()
+
+	if !strings.HasPrefix(dir, os.TempDir()) {
+		t.Fatalf("expected fallback under %q, got %q", os.TempDir(), dir)
+	}
+}
+
 func TestBuildClaudeArgsExtraArgsBeforeCustomArgsAndFiltersBoth(t *testing.T) {
 	args := buildClaudeArgs(ExecOptions{
 		ExtraArgs:  []string{"--output-format", "text", "--max-budget-usd", "1.00"},

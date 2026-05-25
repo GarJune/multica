@@ -44,6 +44,14 @@ type ExecOptions struct {
 	// field rather than fail (so MUL-2339 can grow runtime support
 	// incrementally without breaking unrelated agents).
 	ThinkingLevel string
+	// SkillsLocal opts the runtime into ("merge") or out of ("ignore") the
+	// host machine's user-global skill directory. Honoured by the Claude
+	// backend: "ignore" (default — anything other than "merge") redirects
+	// CLAUDE_CONFIG_DIR to an isolated per-task scratch dir so the CLI
+	// never reads `~/.claude/skills/`; "merge" preserves the inherit-from-
+	// machine behavior. Codex already isolates via CODEX_HOME and ignores
+	// this option; other backends ignore it as well (no-op).
+	SkillsLocal string
 }
 
 // Session represents a running agent execution.

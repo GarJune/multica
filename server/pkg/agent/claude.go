@@ -66,7 +66,34 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+
+	// Skill isolation. The default ("ignore") points CLAUDE_CONFIG_DIR at an
+	// empty per-run scratch dir so `claude` cannot discover the host user's
+	// `~/.claude/skills/`. A single broken skill on one operator's machine
+	// crashes the CLI before it ever reads stdin (GitHub #3052: silent
+	// "broken pipe" exits), so shared / team agents default to isolation.
+	// "merge" is the explicit opt-in for personal agents that want to keep
+	// inheriting local skills. Workspace skills (`{cwd}/.claude/skills/`)
+	// are loaded by the CLI from cwd regardless and are not affected.
+	isolateClaudeConfig := opts.SkillsLocal != "merge"
+	var claudeConfigDir string
+	var claudeConfigCleanup func()
+	if isolateClaudeConfig {
+		dir, cleanup, err := newIsolatedClaudeConfigDir(opts.Cwd)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("isolate claude config dir: %w", err)
+		}
+		claudeConfigDir = dir
+		claudeConfigCleanup = cleanup
+	}
+	defer func() {
+		if claudeConfigCleanup != nil {
+			claudeConfigCleanup()
+		}
+	}()
+
+	cmd.Env = buildClaudeEnv(b.cfg.Env, claudeConfigDir)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -111,10 +138,14 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	}
 	closeStdin()
 
-	b.cfg.Logger.Info("claude started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
+	b.cfg.Logger.Info("claude started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model, "skills_local", opts.SkillsLocal, "claude_config_dir", claudeConfigDir)
 
 	// cmd.Start() succeeded — transfer temp file ownership to the goroutine.
 	mcpFileCleanup = nil
+	// Transfer isolated-config cleanup the same way: the goroutine outlives
+	// this function, so it owns removal of the scratch dir.
+	isolatedConfigCleanup := claudeConfigCleanup
+	claudeConfigCleanup = nil
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
@@ -125,6 +156,9 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		defer close(resCh)
 		if mcpConfigPath != "" {
 			defer os.Remove(mcpConfigPath)
+		}
+		if isolatedConfigCleanup != nil {
+			defer isolatedConfigCleanup()
 		}
 
 		startTime := time.Now()
@@ -567,6 +601,31 @@ func buildEnv(extra map[string]string) []string {
 	return mergeEnv(os.Environ(), extra)
 }
 
+// buildClaudeEnv builds the env slice for the claude subprocess. When
+// claudeConfigDir is non-empty (isolated-skills mode), it overrides
+// CLAUDE_CONFIG_DIR for the child so the CLI looks at the per-task
+// scratch dir instead of `~/.claude/`. We also strip the parent's
+// CLAUDE_CONFIG_DIR so a daemon-host env var cannot accidentally win
+// the override race. Callers in "merge" mode pass "" and behaviour
+// matches the pre-MUL-2603 buildEnv path.
+func buildClaudeEnv(extra map[string]string, claudeConfigDir string) []string {
+	env := mergeEnv(os.Environ(), extra)
+	if claudeConfigDir == "" {
+		return env
+	}
+	// Drop any CLAUDE_CONFIG_DIR already in the slice (from os.Environ or
+	// from custom_env) before appending the isolated override so the last
+	// entry wins deterministically.
+	filtered := env[:0]
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return append(filtered, "CLAUDE_CONFIG_DIR="+claudeConfigDir)
+}
+
 func mergeEnv(base []string, extra map[string]string) []string {
 	env := make([]string, 0, len(base)+len(extra))
 	for _, entry := range base {
@@ -586,6 +645,39 @@ func isFilteredChildEnvKey(key string) bool {
 	return key == "CLAUDECODE" ||
 		strings.HasPrefix(key, "CLAUDECODE_") ||
 		strings.HasPrefix(key, "CLAUDE_CODE_")
+}
+
+// newIsolatedClaudeConfigDir creates an empty per-run scratch directory used
+// as CLAUDE_CONFIG_DIR when the agent opted out of host-machine skill
+// merging. The dir is placed under the task workdir when available so it
+// lives and dies with the task's storage allocation; otherwise it falls
+// back to the OS temp dir. The returned cleanup removes the directory and
+// is safe to call from any goroutine exactly once.
+func newIsolatedClaudeConfigDir(taskCwd string) (string, func(), error) {
+	parent := taskCwd
+	if parent == "" {
+		parent = os.TempDir()
+	}
+	dir, err := os.MkdirTemp(parent, "multica-claude-config-*")
+	if err != nil {
+		// Fall back to the OS temp dir if the cwd refused us (read-only
+		// volume, missing parent, etc.). A scratch dir somewhere on the
+		// host is still strictly better than letting the CLI auto-discover
+		// `~/.claude/skills/`.
+		if parent != os.TempDir() {
+			dir, err = os.MkdirTemp(os.TempDir(), "multica-claude-config-*")
+		}
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	cleanup := func() {
+		// Best effort — caller logs through normal channels if cleanup fails
+		// (a leftover empty config dir is non-fatal; the GC sweeper that
+		// reclaims orphaned task workdirs will catch it too).
+		_ = os.RemoveAll(dir)
+	}
+	return dir, cleanup, nil
 }
 
 // blockedArgMode specifies whether a blocked arg takes a value or is standalone.

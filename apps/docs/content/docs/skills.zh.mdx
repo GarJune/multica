@@ -16,6 +16,17 @@ Multica 支持两种 Skill 来源：
 
 大多数情况用**工作区 Skill**：导入一次，团队所有成员的智能体都能用。本机 Skill 适合先在本地测试、或涉及敏感本地内容的场景。
 
+### 按智能体维度的"合并本机 Skill"开关
+
+默认情况下 Multica 会让运行时**和本机用户级 skill 目录隔离**。比如 Claude 运行时不再读取共享智能体所在机器的 `~/.claude/skills/`——否则某台机器上有问题的本机 skill 会在 CLI 还没读到 prompt 前就崩溃（典型表现是 `broken pipe`，参见 GitHub #3052）。
+
+每个智能体现在带有一个 `skills_local` 开关，可在 **创建 Agent** 弹窗或智能体的 **Skills** 标签页里切换：
+
+- **关闭 —— Ignore（默认）**：运行时使用隔离的配置目录，只能看到工作区 Skill。**推荐用于团队共享智能体**。
+- **开启 —— Merge**：运行时同时继承本机的用户级 skill 目录和工作区 Skill。适合个人智能体、且明确依赖本机 skill 的场景。
+
+无论开关如何，工作区目录下的 `{workDir}/.claude/skills/` 都会照常加载——这个开关只控制本机用户级目录。Codex 本身已经通过 `CODEX_HOME` 做了隔离，所以开关对 Codex 没有影响。
+
 ## 导入 Skill
 
 工作区 Skill 有四种来源：

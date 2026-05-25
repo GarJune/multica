@@ -4,6 +4,17 @@ export type AgentRuntimeMode = "local" | "cloud";
 
 export type AgentVisibility = "workspace" | "private";
 
+/**
+ * Per-agent toggle controlling whether the runtime merges the host machine's
+ * user-global skill directory into the agent. "ignore" (default) isolates the
+ * runtime; "merge" preserves the legacy inherit-from-machine behavior. Today
+ * only the Claude runtime honours the switch — others either already isolate
+ * (Codex via CODEX_HOME) or treat it as a no-op. Older backends omit the
+ * field; clients MUST treat undefined as "ignore" so the safer default wins
+ * on drift.
+ */
+export type AgentSkillsLocal = "ignore" | "merge";
+
 // Runtime visibility is a separate axis from agent visibility — different
 // vocabulary because it gates a different action. "private" (default) means
 // only the runtime owner and workspace admins can bind agents to it;
@@ -142,6 +153,13 @@ export interface Agent {
    * (MUL-2339).
    */
   thinking_level?: string;
+  /**
+   * Per-agent toggle for merging the host machine's user-global skill
+   * directory (e.g. Claude's `~/.claude/skills/`) into the agent. Older
+   * backends that predate the column omit this field; consumers MUST
+   * default to `"ignore"` for safety on drift (#3052).
+   */
+  skills_local?: AgentSkillsLocal;
   owner_id: string | null;
   skills: AgentSkillSummary[];
   created_at: string;
@@ -177,6 +195,10 @@ export interface CreateAgentRequest {
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
+  /** Per-agent host-skill merge toggle. Defaults to `"ignore"` server-side
+   *  when omitted; pass `"merge"` to opt the agent into inheriting the host
+   *  machine's user-global skill directory. */
+  skills_local?: AgentSkillsLocal;
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
@@ -274,6 +296,8 @@ export interface UpdateAgentRequest {
    *     runtime's provider enum, rejected with 400 if not recognised
    */
   thinking_level?: string;
+  /** Update the host-skill merge toggle. Omit to leave unchanged. */
+  skills_local?: AgentSkillsLocal;
 }
 
 // Skills

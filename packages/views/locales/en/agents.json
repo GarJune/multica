@@ -242,7 +242,10 @@
       "list_loading": "Loading…",
       "list_empty_default": "No skills available.",
       "list_no_match": "No skills match.",
-      "search_placeholder": "Search skills…"
+      "search_placeholder": "Search skills…",
+      "local_label": "Allow locally installed skills",
+      "local_hint_off": "Off — the agent uses only workspace skills. Safer default; recommended for shared agents.",
+      "local_hint_on": "On — the runtime also merges the host machine's user-global skill directory (e.g. ~/.claude/skills/). A broken local skill on one operator's machine can crash this agent."
     },
     "avatar": {
       "change_aria": "Change avatar",
@@ -287,9 +290,14 @@
       "save_failed_toast": "Failed to save custom arguments"
     },
     "skills": {
-      "intro": "Workspace skills assigned to this agent. Local runtime skills are always available automatically.",
+      "intro": "Workspace skills assigned to this agent. The host machine's user-global skill directory is only merged when the toggle below is on.",
       "add_action": "Add skill",
       "import_hint": "Importing creates a workspace copy that your team can edit and reuse.",
+      "local_label": "Allow locally installed skills",
+      "local_hint_off": "Off — the agent uses only workspace skills. Safer default; recommended for shared agents.",
+      "local_hint_on": "On — the runtime also merges the host machine's user-global skill directory (e.g. ~/.claude/skills/). A broken local skill on one operator's machine can crash this agent.",
+      "local_saved_toast": "Skill merge setting saved",
+      "local_save_failed_toast": "Failed to save skill merge setting",
       "empty_title": "No skills assigned",
       "empty_hint": "Add workspace skills to share team knowledge with this agent.",
       "remove_failed_toast": "Failed to remove skill",

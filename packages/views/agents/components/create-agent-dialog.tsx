@@ -7,12 +7,14 @@ import { ModelDropdown } from "./model-dropdown";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
+import { SkillsLocalToggle } from "./skills-local-toggle";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
+  AgentSkillsLocal,
   AgentVisibility,
   RuntimeDevice,
   MemberWithUser,
@@ -92,6 +94,12 @@ export function CreateAgentDialog({
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),
   );
+  // Default to "ignore" for new agents (matches the server-side safe
+  // default and the rule for shared agents). Duplicate mode carries the
+  // source agent's value through so a personal agent stays personal.
+  const [skillsLocal, setSkillsLocal] = useState<AgentSkillsLocal>(
+    () => (template?.skills_local === "merge" ? "merge" : "ignore"),
+  );
   const [creating, setCreating] = useState(false);
 
   // Duplicate-mode pre-fill: clone lands on the source agent's runtime so
@@ -162,6 +170,11 @@ export function CreateAgentDialog({
         model: model.trim() || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_url: avatarUrl ?? undefined,
+        // Only send the toggle when the user opted in. "ignore" is the
+        // server-side default; omitting the field keeps the request body
+        // small and prevents older backends without the column from
+        // rejecting the request.
+        skills_local: skillsLocal === "merge" ? "merge" : undefined,
       };
       if (template) {
         // Duplicate path: forward the hidden config fields the source
@@ -360,6 +373,12 @@ export function CreateAgentDialog({
             <SkillMultiSelect
               selectedIds={selectedSkillIds}
               onChange={setSelectedSkillIds}
+            />
+
+            <SkillsLocalToggle
+              value={skillsLocal}
+              onChange={setSkillsLocal}
+              hintScope="create"
             />
           </div>
         </div>

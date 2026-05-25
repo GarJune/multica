@@ -50,8 +50,15 @@ type AgentResponse struct {
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
-	ThinkingLevel string              `json:"thinking_level"`
-	OwnerID       *string             `json:"owner_id"`
+	ThinkingLevel string `json:"thinking_level"`
+	// SkillsLocal controls whether the runtime merges the host machine's
+	// user-global skill directory (e.g. Claude's `~/.claude/skills/`) into
+	// the agent's skill set. "ignore" (default) isolates the runtime so a
+	// broken local skill cannot crash a shared agent (#3052); "merge"
+	// preserves the pre-existing inherit-from-machine behavior. Workspace
+	// skills (`{workDir}/.claude/skills/`) are always loaded regardless.
+	SkillsLocal string              `json:"skills_local"`
+	OwnerID     *string             `json:"owner_id"`
 	Skills        []AgentSkillSummary `json:"skills"`
 	CreatedAt     string              `json:"created_at"`
 	UpdatedAt     string              `json:"updated_at"`
@@ -111,6 +118,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
 		Model:              a.Model.String,
 		ThinkingLevel:      a.ThinkingLevel.String,
+		SkillsLocal:        normalizeSkillsLocal(a.SkillsLocal),
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []AgentSkillSummary{},
 		CreatedAt:          timestampToString(a.CreatedAt),
@@ -224,6 +232,11 @@ type TaskAgentData struct {
 	McpConfig     json.RawMessage          `json:"mcp_config,omitempty"`
 	Model         string                   `json:"model,omitempty"`
 	ThinkingLevel string                   `json:"thinking_level,omitempty"`
+	// SkillsLocal mirrors the agent column of the same name. Daemon reads
+	// it to decide whether to isolate the Claude runtime from the host's
+	// user-global `~/.claude/skills/`. Empty string is treated as the
+	// safe default ("ignore") by the daemon — see normalizeSkillsLocal.
+	SkillsLocal string `json:"skills_local,omitempty"`
 }
 
 func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
@@ -445,6 +458,11 @@ type CreateAgentRequest struct {
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
 	ThinkingLevel      string            `json:"thinking_level"`
+	// SkillsLocal opts the agent into ("merge") or out of ("ignore") the
+	// runtime's user-global skill discovery. Empty / missing defaults to
+	// "ignore". Validated in CreateAgent / UpdateAgent against the
+	// recognised set; anything else returns 400.
+	SkillsLocal string `json:"skills_local"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -544,6 +562,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	skillsLocal := normalizeSkillsLocal(req.SkillsLocal)
+	if !isValidSkillsLocal(skillsLocal) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("skills_local %q is invalid (expected \"ignore\" or \"merge\")", req.SkillsLocal))
+		return
+	}
+
 	// Probe workspace agent count BEFORE the insert so the funnel has a
 	// clean "first agent ever in this workspace" signal — Step 4 of
 	// onboarding always lands in this branch. A non-fatal read: if the
@@ -591,6 +615,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		McpConfig:          mc,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		SkillsLocal:        skillsLocal,
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -649,6 +674,30 @@ type UpdateAgentRequest struct {
 	// Distinguishing those modes is why this is a pointer; the raw-fields
 	// map captured at decode time tells us whether the key was sent.
 	ThinkingLevel *string `json:"thinking_level"`
+	// SkillsLocal: nil means "no change"; non-nil overrides the stored
+	// value after validation. We use a pointer (rather than the empty
+	// string sentinel ThinkingLevel uses) because there is no "clear"
+	// state — the column has a NOT NULL default and the toggle is binary.
+	SkillsLocal *string `json:"skills_local"`
+}
+
+// normalizeSkillsLocal coerces empty / unknown stored values to the safe
+// default "ignore". Older rows written before the column existed get a
+// NOT NULL default at migration time, but the helper still guards against
+// any future schema drift or hand-edited rows so we never surface an
+// in-between state to clients or the daemon.
+func normalizeSkillsLocal(stored string) string {
+	if stored == "merge" {
+		return "merge"
+	}
+	return "ignore"
+}
+
+// isValidSkillsLocal mirrors the CHECK constraint on agent.skills_local.
+// The DB would reject a write with a 23514 violation anyway, but pre-flight
+// validation lets the API return a clean 400 with the offending value.
+func isValidSkillsLocal(v string) bool {
+	return v == "ignore" || v == "merge"
 }
 
 // workspaceAlwaysRedactEnv checks whether the workspace has opted into
@@ -817,6 +866,14 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != nil {
 		params.Model = pgtype.Text{String: *req.Model, Valid: true}
+	}
+	if req.SkillsLocal != nil {
+		value := normalizeSkillsLocal(*req.SkillsLocal)
+		if !isValidSkillsLocal(value) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("skills_local %q is invalid (expected \"ignore\" or \"merge\")", *req.SkillsLocal))
+			return
+		}
+		params.SkillsLocal = pgtype.Text{String: value, Valid: true}
 	}
 
 	// thinking_level handling (MUL-2339). Tri-state semantics:

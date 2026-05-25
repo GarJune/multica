@@ -289,6 +289,19 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
+        version: "0.3.7",
+        date: "2026-05-25",
+        title: "Per-Agent Local-Skill Isolation",
+        changes: [],
+        features: [
+          "Agents now carry a Skill safety switch: shared agents default to ignoring the host machine's user-global skill directory (e.g. ~/.claude/skills/), so a broken local Skill on one operator's machine can no longer crash a teammate's run",
+          "Create Agent and the agent Skills tab expose the new toggle — flip it on for personal agents that intentionally rely on locally installed Skills",
+        ],
+        fixes: [
+          "Claude runtime no longer silently exits with 'broken pipe' when the host has a malformed local Skill (GitHub #3052)",
+        ],
+      },
+      {
         version: "0.3.6",
         date: "2026-05-22",
         title: "Smarter Welcome, Live Work Signals & Safer Collaboration",

@@ -11,6 +11,7 @@ import enAgents from "../../../locales/en/agents.json";
 const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
 
 const mockListSkills = vi.hoisted(() => vi.fn());
+const mockUpdateAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -20,6 +21,7 @@ vi.mock("@multica/core/api", () => ({
   api: {
     listSkills: (...args: unknown[]) => mockListSkills(...args),
     setAgentSkills: vi.fn(),
+    updateAgent: (...args: unknown[]) => mockUpdateAgent(...args),
   },
 }));
 
@@ -57,7 +59,7 @@ const agent: Agent = {
   archived_by: null,
 };
 
-function renderSkillsTab() {
+function renderSkillsTab(overrides: Partial<Agent> = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -69,7 +71,7 @@ function renderSkillsTab() {
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
-        <SkillsTab agent={agent} />
+        <SkillsTab agent={{ ...agent, ...overrides }} />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -79,6 +81,7 @@ describe("SkillsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListSkills.mockResolvedValue([]);
+    mockUpdateAgent.mockResolvedValue({});
   });
 
   it("does not render the inline Local Runtime Skills section even for local-runtime agents", async () => {
@@ -92,7 +95,7 @@ describe("SkillsTab", () => {
     // Top informational callout should still render; that's how we know
     // the tab body itself rendered (not stuck in a loading state).
     expect(
-      await screen.findByText(/Local runtime skills are always available/i),
+      await screen.findByText(/host machine's user-global skill directory/i),
     ).toBeInTheDocument();
 
     // The removed section's heading and its trigger button must be gone.
@@ -100,13 +103,25 @@ describe("SkillsTab", () => {
     expect(
       screen.queryByRole("button", { name: /Import to Workspace/i }),
     ).not.toBeInTheDocument();
+  });
 
-    // No runtime list / local-skills query should be wired up either —
-    // we removed @multica/core/runtimes from this file's imports.
-    // Surface it via behaviour: the `agent` here has runtime_id but the
-    // tab must not invoke any runtime-list mock to render. (Both are
-    // already deleted from the mock setup above; this assertion is
-    // implicit — the test file would fail to import if the component
-    // still referenced runtimeListOptions / runtimeLocalSkillsOptions.)
+  it("renders the local-skill toggle off by default (safe-default for shared agents)", async () => {
+    renderSkillsTab();
+
+    const toggle = await screen.findByRole("switch", {
+      name: /Allow locally installed skills/i,
+    });
+    // Base UI Switch reflects state via data-state; aria-checked is the
+    // accessible read.
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("reflects merge mode when the agent opted in", async () => {
+    renderSkillsTab({ skills_local: "merge" });
+
+    const toggle = await screen.findByRole("switch", {
+      name: /Allow locally installed skills/i,
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
   });
 });

@@ -289,6 +289,19 @@ export function createZhDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
+        version: "0.3.7",
+        date: "2026-05-25",
+        title: "按 Agent 维度隔离本机 Skill",
+        changes: [],
+        features: [
+          "每个 Agent 新增 Skill 安全开关：共享智能体默认忽略本机用户级 Skill 目录（例如 ~/.claude/skills/），团队成员机器上有问题的本机 Skill 不再会拖崩共享 Agent",
+          "创建 Agent 弹窗和 Agent 的 Skills 标签页都能调整该开关——个人智能体如确需依赖本机 Skill 可手动开启",
+        ],
+        fixes: [
+          "Claude 运行时不会再因本机 Skill 异常而静默 broken pipe 退出（GitHub #3052）",
+        ],
+      },
+      {
         version: "0.3.6",
         date: "2026-05-22",
         title: "父子 Issue 协作优化、实时智能体工作状态展示",

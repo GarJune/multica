@@ -16,6 +16,17 @@ Multica supports two skill sources:
 
 Most of the time you want **workspace skills**: import once, every teammate's agent can use it. Local skills are a fit when you want to test locally first, or when the content involves sensitive local material.
 
+### Per-agent host-skill merge toggle
+
+By default Multica **isolates** the runtime from the host machine's user-global skill directory. The Claude runtime, for example, no longer reads `~/.claude/skills/` for a shared agent — a broken local skill on one operator's machine would otherwise crash the CLI before it ever read a prompt (silent `broken pipe` exits, see GitHub #3052).
+
+Each agent now carries a `skills_local` switch you can flip from the **Create Agent** dialog or the agent's **Skills** tab:
+
+- **Off — Ignore (default)**: the runtime is launched against an isolated config directory; only workspace skills are available. Recommended for any agent shared with teammates.
+- **On — Merge**: the runtime inherits the user-global skill directory in addition to workspace skills. Use this for personal agents that intentionally rely on locally installed skills.
+
+Workspace skills under `{workDir}/.claude/skills/` are loaded regardless of the toggle — this switch only governs the host's user-global directory. Codex already isolates skill discovery via `CODEX_HOME` and ignores the toggle.
+
 ## Importing a skill
 
 Workspace skills come from four sources:
