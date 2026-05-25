@@ -298,7 +298,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         title: "iOS 客户端、Helm 自托管与更顺畅的协作体验",
         changes: [],
         features: [
-          "Multica iOS 客户端发布首个版本，覆盖登录、工作区、收件箱、Issue、项目、聊天、评论、表情回应、在线状态和实时更新",
+          "Multica iOS 客户端发布官方首个可用版本，覆盖登录、工作区、收件箱、Issue、项目、聊天、评论、表情回应、在线状态和实时更新；目前暂未上架 App Store，需要用户自行打包安装",
           "自托管团队现在可以通过 Helm 将 Multica 部署到 Kubernetes，Docker 安装也有更清晰的端口和 URL 配置",
           "项目资源选择器新增仓库搜索，工作区仓库设置也可以保存描述，帮助智能体理解每个代码库",
           "运行时用量现在可以更准确识别 DeepSeek、Kimi K2.6、Zhipu GLM 和长上下文 Claude Opus 的费用",

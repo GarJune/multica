@@ -298,7 +298,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         title: "Multica for iOS, Helm Self-Hosting & Smoother Collaboration",
         changes: [],
         features: [
-          "Multica for iOS is now available as the first mobile client, covering login, workspaces, inbox, Issues, projects, chat, comments, reactions, presence, and live updates",
+          "Multica for iOS is now available as our first official usable mobile client, covering login, workspaces, inbox, Issues, projects, chat, comments, reactions, presence, and live updates; it is not on the App Store yet, so users need to build and install it manually",
           "Self-hosted teams can now deploy Multica to Kubernetes with a Helm chart, while Docker-based installs keep clearer port and URL controls",
           "Project resource pickers now include repository search, and workspace repository settings can store descriptions that help agents understand each codebase",
           "Runtime usage now recognizes DeepSeek, Kimi K2.6, Zhipu GLM, and long-context Claude Opus model costs more accurately",
