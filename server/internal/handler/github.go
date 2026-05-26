@@ -489,6 +489,19 @@ func (h *Handler) ListPullRequestsForIssue(w http.ResponseWriter, r *http.Reques
 // version numbers like "v1.2-3".
 var identifierRe = regexp.MustCompile(`(?i)\b([a-z][a-z0-9]{1,9})-(\d+)\b`)
 
+// closingIdentifierRe extracts identifiers that appear immediately after a
+// GitHub-style closing keyword ("close[sd]?", "fix(e[sd])?", "resolve[sd]?"),
+// optionally separated by a colon and whitespace. Matching is intentionally
+// strict on adjacency — "Fix MUL-1" closes MUL-1, but "Fix login MUL-1"
+// does not. This mirrors GitHub's own closing-keyword grammar and is the
+// gate the webhook uses to decide whether to auto-advance an issue to
+// `done` after a PR merges. References like "Follow up in MUL-2" and bare
+// title prefixes like "MUL-1: ..." link the PR (via identifierRe) but
+// never auto-close.
+var closingIdentifierRe = regexp.MustCompile(
+	`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[:\s]+([a-z][a-z0-9]{1,9})-(\d+)\b`,
+)
+
 // HandleGitHubWebhook (POST /api/webhooks/github) is GitHub's destination for
 // every event from a connected installation. We verify HMAC signature, route
 // on X-GitHub-Event, and either upsert PR rows + auto-link to issues or
@@ -711,6 +724,16 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 	linkedIssueIDs := make([]string, 0)
 	if h.workspaceAutoLinkPRsEnabled(ctx, inst.WorkspaceID) {
 		idents := extractIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
+		// closingIdents is the subset of identifiers that this PR explicitly
+		// declared via a closing keyword ("Closes/Fixes/Resolves MUL-X").
+		// Linking still happens for every mention (idents above), but the
+		// auto-advance-to-done gate below only fires for keyword-declared
+		// identifiers — bare title prefixes and branch-name references are
+		// link-only.
+		closingIdents := map[string]struct{}{}
+		for _, c := range extractClosingIdentifiers(p.PullRequest.Title, p.PullRequest.Body) {
+			closingIdents[c] = struct{}{}
+		}
 		prefix := h.getIssuePrefix(ctx, inst.WorkspaceID)
 		for _, id := range idents {
 			issue, ok := h.lookupIssueByIdentifier(ctx, inst.WorkspaceID, prefix, id)
@@ -731,12 +754,19 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 			// A terminal PR event (`merged` or `closed`) may be the moment the
 			// last in-flight sibling resolves, so we re-evaluate the issue on
 			// both. We advance the issue to done when:
-			//   1. the issue isn't already terminal (`done` / `cancelled`);
-			//   2. no sibling PR is still `open` / `draft`;
-			//   3. at least one linked PR (this one or a sibling) is `merged`.
-			// Rule (3) prevents an "all closed-without-merge" sequence from
-			// silently auto-closing the issue — if nothing was ever delivered,
-			// the user should decide what to do manually.
+			//   1. this PR explicitly declared closing intent for the issue
+			//      (closing keyword in title/body — see closingIdents above);
+			//   2. the issue isn't already terminal (`done` / `cancelled`);
+			//   3. no sibling PR is still `open` / `draft`;
+			//   4. at least one linked PR (this one or a sibling) is `merged`.
+			// Rule (1) is what prevents "Follow up in MUL-2" / "Unblocks MUL-3"
+			// references from being treated the same as "Closes MUL-1". Rule
+			// (4) prevents an "all closed-without-merge" sequence from
+			// silently auto-closing the issue — if nothing was ever
+			// delivered, the user should decide what to do manually.
+			if _, declared := closingIdents[id]; !declared {
+				continue
+			}
 			if (state == "merged" || state == "closed") && issue.Status != "done" && issue.Status != "cancelled" {
 				counts, err := h.Queries.GetSiblingPullRequestStateCountsForIssue(ctx, db.GetSiblingPullRequestStateCountsForIssueParams{
 					IssueID: issue.ID,
@@ -979,6 +1009,29 @@ func extractIdentifiers(parts ...string) []string {
 	out := []string{}
 	for _, src := range parts {
 		for _, m := range identifierRe.FindAllStringSubmatch(src, -1) {
+			ident := strings.ToUpper(m[1]) + "-" + m[2]
+			if _, dup := seen[ident]; dup {
+				continue
+			}
+			seen[ident] = struct{}{}
+			out = append(out, ident)
+		}
+	}
+	return out
+}
+
+// extractClosingIdentifiers pulls every "PREFIX-NUMBER" identifier that
+// appears immediately after a GitHub-style closing keyword in the supplied
+// fields, deduplicating in input order. Identifiers in branch names are
+// intentionally excluded — callers should pass only title and body — because
+// branch names are not natural-language fields and treating "mul-1/fix-login"
+// as a close declaration would silently re-open the bug this gate is meant
+// to fix.
+func extractClosingIdentifiers(parts ...string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, src := range parts {
+		for _, m := range closingIdentifierRe.FindAllStringSubmatch(src, -1) {
 			ident := strings.ToUpper(m[1]) + "-" + m[2]
 			if _, dup := seen[ident]; dup {
 				continue
