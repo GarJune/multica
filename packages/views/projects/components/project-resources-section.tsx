@@ -96,6 +96,15 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       .filter((r) => r.resource_ref.daemon_id === localDaemonId)
       .map((r) => r.resource_ref.local_path),
   );
+  // Per (project, daemon) we allow at most one local_directory — the
+  // daemon-side resolver picks the first match by daemon_id, so two rows
+  // on the same daemon would silently route the agent into one of them.
+  // The server enforces this at the API boundary; the UI mirrors the
+  // restriction by hiding the "Add" affordance once a row exists for the
+  // current daemon, otherwise users would only discover the limit on a
+  // 409 toast.
+  const hasLocalDirectoryForCurrentDaemon =
+    localDaemonId !== null && attachedLocalPaths.size > 0;
 
   const repoQuery = repoSearch.trim().toLowerCase();
   const filteredRepos =
@@ -120,6 +129,13 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
     try {
       if (!localDaemonId || !daemonStatus.running) {
         toast.error(t(($) => $.resources.toast_local_daemon_not_running));
+        return;
+      }
+      // Race guard: the button gates on this already, but if the picker
+      // is opened while a concurrent resource-create lands the user
+      // would otherwise see a 409. Surface a clearer message instead.
+      if (attachedLocalPaths.size > 0) {
+        toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
         return;
       }
       const picked = await pickDirectory();
@@ -342,7 +358,8 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 disabled={
                   picking ||
                   createResource.isPending ||
-                  !daemonStatus.running
+                  !daemonStatus.running ||
+                  hasLocalDirectoryForCurrentDaemon
                 }
                 onClick={() => {
                   void handleAttachLocalDirectory();
@@ -354,6 +371,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               {!daemonStatus.running && (
                 <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">
                   {t(($) => $.resources.local_daemon_offline_hint)}
+                </p>
+              )}
+              {daemonStatus.running && hasLocalDirectoryForCurrentDaemon && (
+                <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">
+                  {t(($) => $.resources.local_daemon_already_attached_hint)}
                 </p>
               )}
             </div>

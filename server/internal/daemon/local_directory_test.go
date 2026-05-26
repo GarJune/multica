@@ -101,6 +101,41 @@ func TestFindLocalDirectoryAssignment(t *testing.T) {
 			t.Fatalf("expected error for malformed json")
 		}
 	})
+
+	t.Run("two local_directory rows on this daemon fail fast", func(t *testing.T) {
+		// Server-side findLocalDirectoryConflict enforces one
+		// local_directory per (project, daemon). If two rows are
+		// somehow present (older API client, direct DB writes), the
+		// daemon must refuse to guess which directory to execute in.
+		tmp2 := t.TempDir()
+		_, err := findLocalDirectoryAssignment([]ProjectResourceData{
+			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: thisDaemon})},
+			{ID: "r2", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp2, DaemonID: thisDaemon})},
+		}, thisDaemon)
+		if err == nil {
+			t.Fatalf("expected error for two local_directory rows pinned to this daemon")
+		}
+		if !strings.Contains(err.Error(), "multiple local_directory") {
+			t.Errorf("error %q did not mention multiple local_directory", err)
+		}
+	})
+
+	t.Run("local_directory rows on different daemons coexist", func(t *testing.T) {
+		// Different daemons MAY each carry one row — same path on
+		// different machines is allowed; this daemon only resolves
+		// its own row regardless of how many other-daemon rows are
+		// in the list.
+		got, err := findLocalDirectoryAssignment([]ProjectResourceData{
+			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: thisDaemon})},
+			{ID: "r2", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: otherDaemon})},
+		}, thisDaemon)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if got == nil {
+			t.Fatalf("expected assignment, got nil")
+		}
+	})
 }
 
 func TestValidateLocalPath(t *testing.T) {

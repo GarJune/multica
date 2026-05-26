@@ -44,13 +44,17 @@ type localDirectoryAssignment struct {
 // type local_directory whose daemon_id matches this daemon. Returns nil
 // (without error) when no such resource exists — the task takes the regular
 // github_repo / worktree code path. Returns an error only when the matching
-// resource is structurally broken (bad JSON, missing fields) so the daemon
-// can fail the task fast instead of silently falling back.
+// resource is structurally broken (bad JSON, missing fields) OR when more
+// than one resource is pinned to this daemon — that's a server-side
+// invariant violation, and silently picking the first match would let the
+// agent write into an arbitrary directory the user didn't intend.
 //
-// A task can carry at most one local_directory resource per daemon by
-// construction (the desktop UI prevents adding two; the daemon does not
-// enforce it but picks the first match).
+// Server-side `findLocalDirectoryConflict` enforces a single local_directory
+// per (project, daemon), so two matches here means either the constraint
+// was bypassed (older API client) or the data was corrupted. Either way,
+// fail fast rather than guess.
 func findLocalDirectoryAssignment(resources []ProjectResourceData, daemonID string) (*localDirectoryAssignment, error) {
+	var match *localDirectoryAssignment
 	for _, r := range resources {
 		if r.ResourceType != localDirectoryResourceType {
 			continue
@@ -69,6 +73,17 @@ func findLocalDirectoryAssignment(resources []ProjectResourceData, daemonID stri
 			// per daemon, and other daemons will resolve their own row.
 			continue
 		}
+		if match != nil {
+			// Server-side invariant: at most one local_directory per
+			// (project, daemon). Two matches here means the constraint
+			// was bypassed by an older API client or by direct DB writes.
+			// Either way, refuse to guess which directory the user meant.
+			return nil, fmt.Errorf(
+				"local_directory: project has multiple local_directory resources for this daemon (%q and %q); remove the extra in project settings",
+				match.AbsPath,
+				strings.TrimSpace(ref.LocalPath),
+			)
+		}
 		absPath, err := normalizeLocalPath(ref.LocalPath)
 		if err != nil {
 			return nil, err
@@ -77,13 +92,13 @@ func findLocalDirectoryAssignment(resources []ProjectResourceData, daemonID stri
 		if err != nil {
 			return nil, err
 		}
-		return &localDirectoryAssignment{
+		match = &localDirectoryAssignment{
 			Ref:      ref,
 			AbsPath:  absPath,
 			RealPath: realPath,
-		}, nil
+		}
 	}
-	return nil, nil
+	return match, nil
 }
 
 // normalizeLocalPath strips whitespace and resolves the path to an absolute

@@ -799,16 +799,16 @@ func TestProjectResourceUpdateLifecycle(t *testing.T) {
 	}
 }
 
-// TestProjectResourceLocalDirectoryLabelShadow pins the project-level conflict
-// check for local_directory: two resources on the same project pointing at the
-// same (daemon_id, local_path) must collide even when the embedded `label`
-// differs. The DB UNIQUE(project_id, resource_type, resource_ref) constraint
-// only matches the entire ref JSON, so a label typo would otherwise silently
-// create a duplicate binding.
-func TestProjectResourceLocalDirectoryLabelShadow(t *testing.T) {
+// TestProjectResourceLocalDirectoryDaemonScopedConflict pins the project-level
+// conflict check for local_directory: one row per daemon per project. The
+// daemon-side resolver picks the first match by daemon_id, so silently
+// allowing two rows on the same daemon — even at distinct paths — would let
+// the agent write into whichever sorts first. The DB UNIQUE constraint only
+// catches identical ref JSON; this check covers the broader invariant.
+func TestProjectResourceLocalDirectoryDaemonScopedConflict(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
-		"title": "Local dir label shadow",
+		"title": "Local dir daemon-scoped conflict",
 	})
 	testHandler.CreateProject(w, req)
 	if w.Code != http.StatusCreated {
@@ -825,8 +825,9 @@ func TestProjectResourceLocalDirectoryLabelShadow(t *testing.T) {
 	}()
 
 	const (
-		daemonID  = "d-shadow"
-		localPath = "/Users/foo/work/shadow"
+		daemonID    = "d-scoped"
+		otherDaemon = "d-other"
+		localPath   = "/Users/foo/work/scoped"
 	)
 
 	// First attach succeeds.
@@ -849,8 +850,8 @@ func TestProjectResourceLocalDirectoryLabelShadow(t *testing.T) {
 		t.Fatalf("decode first: %v", err)
 	}
 
-	// Same (daemon_id, local_path) with a different label must still 409 —
-	// the embedded label is human metadata, not a discriminator.
+	// Same (daemon_id, local_path) with a different label must 409 — the
+	// embedded label is human metadata, not a discriminator.
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
 		"resource_type": "local_directory",
@@ -863,30 +864,50 @@ func TestProjectResourceLocalDirectoryLabelShadow(t *testing.T) {
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreateProjectResource(w, req)
 	if w.Code != http.StatusConflict {
-		t.Errorf("label-shadow create: expected 409, got %d: %s", w.Code, w.Body.String())
+		t.Errorf("same daemon same path create: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// And an UPDATE that drives a different resource onto the same target
-	// must also 409. Seed a second resource at a non-conflicting path, then
-	// try to move it onto the first.
+	// A second row on the same daemon at a DIFFERENT path must also 409 —
+	// the daemon-scoped invariant rejects more than one local_directory
+	// per (project, daemon), even if the paths differ.
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
 		"resource_type": "local_directory",
 		"resource_ref": map[string]any{
 			"local_path": "/Users/foo/work/other",
 			"daemon_id":  daemonID,
+			"label":      "other path",
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("same daemon different path create: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Adding the same path on a DIFFERENT daemon is allowed — each daemon
+	// gets to register exactly one local_directory.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "local_directory",
+		"resource_ref": map[string]any{
+			"local_path": localPath,
+			"daemon_id":  otherDaemon,
+			"label":      "other-machine",
 		},
 	})
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreateProjectResource(w, req)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("second seed: %d %s", w.Code, w.Body.String())
+		t.Fatalf("other daemon attach: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 	var second ProjectResourceResponse
 	if err := json.NewDecoder(w.Body).Decode(&second); err != nil {
-		t.Fatalf("decode second: %v", err)
+		t.Fatalf("decode other-daemon row: %v", err)
 	}
 
+	// An UPDATE that drives the other-daemon row onto the first daemon must
+	// also 409 — the first daemon already has a registration.
 	w = httptest.NewRecorder()
 	req = newRequest("PUT", "/api/projects/"+project.ID+"/resources/"+second.ID, map[string]any{
 		"resource_ref": map[string]any{
@@ -898,7 +919,7 @@ func TestProjectResourceLocalDirectoryLabelShadow(t *testing.T) {
 	req = withURLParams(req, "id", project.ID, "resourceId", second.ID)
 	testHandler.UpdateProjectResource(w, req)
 	if w.Code != http.StatusConflict {
-		t.Errorf("label-shadow update: expected 409, got %d: %s", w.Code, w.Body.String())
+		t.Errorf("update onto existing daemon: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
 
 	// Editing the same row in place (different label, same target) must
@@ -918,13 +939,12 @@ func TestProjectResourceLocalDirectoryLabelShadow(t *testing.T) {
 	}
 }
 
-// TestCreateProjectBundledLocalDirectoryLabelShadow pins the second leg of the
-// label-shadow guard: a single POST /api/projects that bundles two
-// local_directory resources with the same (daemon_id, local_path) but
-// different `label` values must reject with 400 before any DB work, otherwise
-// the DB UNIQUE(project_id, resource_type, resource_ref) constraint would let
-// the duplicate slip past (label lives inside resource_ref).
-func TestCreateProjectBundledLocalDirectoryLabelShadow(t *testing.T) {
+// TestCreateProjectBundledLocalDirectoryDaemonConflict pins the second leg of
+// the daemon-scoped invariant: a single POST /api/projects that bundles two
+// local_directory resources on the same daemon — same path, same daemon
+// with different labels, or different paths on the same daemon — must
+// reject with 400 before any DB work.
+func TestCreateProjectBundledLocalDirectoryDaemonConflict(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
 		"title": "Bundled label shadow",
@@ -971,12 +991,12 @@ func TestCreateProjectBundledLocalDirectoryLabelShadow(t *testing.T) {
 		}
 	}
 
-	// A bundle with distinct (daemon_id, local_path) entries still works, even
-	// with different labels on each row — the dedupe key is the target, not
-	// the label.
+	// Two distinct paths on the same daemon must ALSO 400 — the invariant
+	// is "one local_directory per (project, daemon)", not "one per (project,
+	// daemon, path)".
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
-		"title": "Bundled distinct paths",
+		"title": "Bundled distinct paths same daemon",
 		"resources": []map[string]any{
 			{
 				"resource_type": "local_directory",
@@ -997,8 +1017,37 @@ func TestCreateProjectBundledLocalDirectoryLabelShadow(t *testing.T) {
 		},
 	})
 	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("distinct-paths same daemon bundle: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// A bundle with one row per daemon is allowed — each daemon owns its
+	// own local_directory.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Bundled per-daemon rows",
+		"resources": []map[string]any{
+			{
+				"resource_type": "local_directory",
+				"resource_ref": map[string]any{
+					"local_path": "/Users/foo/work/a",
+					"daemon_id":  "d-bundle-1",
+					"label":      "A",
+				},
+			},
+			{
+				"resource_type": "local_directory",
+				"resource_ref": map[string]any{
+					"local_path": "/Users/foo/work/b",
+					"daemon_id":  "d-bundle-2",
+					"label":      "B",
+				},
+			},
+		},
+	})
+	testHandler.CreateProject(w, req)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("distinct-path bundle: expected 201, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("per-daemon bundle: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp struct {
 		ID        string                    `json:"id"`
@@ -1013,6 +1062,6 @@ func TestCreateProjectBundledLocalDirectoryLabelShadow(t *testing.T) {
 		testHandler.DeleteProject(httptest.NewRecorder(), r)
 	}()
 	if len(resp.Resources) != 2 {
-		t.Errorf("distinct-path bundle: expected 2 resources, got %d", len(resp.Resources))
+		t.Errorf("per-daemon bundle: expected 2 resources, got %d", len(resp.Resources))
 	}
 }
