@@ -48,6 +48,35 @@ func (q *Queries) CreatePersonalAccessToken(ctx context.Context, arg CreatePerso
 	return i, err
 }
 
+const extendPersonalAccessTokenExpiry = `-- name: ExtendPersonalAccessTokenExpiry :one
+UPDATE personal_access_token
+SET expires_at = $2
+WHERE id = $1
+  AND revoked = FALSE
+  AND expires_at IS NOT NULL
+  AND expires_at > now()
+  AND expires_at < $2
+RETURNING expires_at
+`
+
+type ExtendPersonalAccessTokenExpiryParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+// In-place renew: only bumps expires_at when the token is still valid
+// (not revoked, not already expired) AND the existing expires_at is
+// earlier than the requested new value. The WHERE clause makes
+// concurrent renews idempotent — the second writer sees the already-
+// extended row and the UPDATE matches zero rows (sqlc :one returns
+// pgx.ErrNoRows, which the caller treats as "already renewed").
+func (q *Queries) ExtendPersonalAccessTokenExpiry(ctx context.Context, arg ExtendPersonalAccessTokenExpiryParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, extendPersonalAccessTokenExpiry, arg.ID, arg.ExpiresAt)
+	var expires_at pgtype.Timestamptz
+	err := row.Scan(&expires_at)
+	return expires_at, err
+}
+
 const getPersonalAccessTokenByHash = `-- name: GetPersonalAccessTokenByHash :one
 SELECT id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked, created_at FROM personal_access_token
 WHERE token_hash = $1

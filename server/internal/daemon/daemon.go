@@ -640,8 +640,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.heartbeatLoop(ctx)
 	go d.gcLoop(ctx)
 	go d.autoUpdateLoop(ctx)
+	go d.tokenRenewalLoop(ctx)
 	go d.serveHealth(ctx, healthLn, time.Now())
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, health)")
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, token-renewal, health)")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err
@@ -1023,6 +1024,69 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 	}
 
 	return fmt.Errorf("repo is configured but not synced")
+}
+
+// DefaultTokenRenewalInterval is how often the daemon asks the server to
+// extend its PAT. The server-side threshold is 7 days of remaining lifetime;
+// polling every ~3 days gives at least two chances to renew before the
+// window closes, so a single failed call (network blip, server restart) does
+// not push the token out of the renewal window.
+const DefaultTokenRenewalInterval = 3 * 24 * time.Hour
+
+// tokenRenewalLoop keeps the daemon's PAT alive by periodically asking the
+// server to extend its expires_at in-place. The first call fires right at
+// startup so a daemon coming back online after a week of downtime gets a
+// fresh expiry before its next heartbeat could 401; the timer then settles
+// into the ~3-day cadence.
+//
+// The server is authoritative on the renewal threshold (it sees expires_at;
+// we don't), so this loop is intentionally dumb: call, log, sleep, repeat.
+// On 401 we surface a clear "re-login required" warning because the daemon
+// has no way to recover automatically — but we keep the loop running so the
+// user sees the same warning on every cycle until they fix it, rather than
+// silently exiting and forcing them to read scrollback to find the cause.
+func (d *Daemon) tokenRenewalLoop(ctx context.Context) {
+	d.tryRenewToken(ctx)
+
+	ticker := time.NewTicker(DefaultTokenRenewalInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.tryRenewToken(ctx)
+		}
+	}
+}
+
+// tryRenewToken performs one renewal round-trip with a short, isolated
+// timeout. Errors are logged but never propagated — there is no caller to
+// handle them. Failures are debug-level except for 401, which gets a
+// user-actionable warning.
+func (d *Daemon) tryRenewToken(ctx context.Context) {
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	resp, err := d.client.RenewToken(reqCtx)
+	if err != nil {
+		if isUnauthorizedError(err) {
+			loginHint := "'multica login'"
+			if d.cfg.Profile != "" {
+				loginHint = fmt.Sprintf("'multica login --profile %s'", d.cfg.Profile)
+			}
+			d.logger.Warn("auth token rejected by server — run "+loginHint+" to re-authenticate, then restart the daemon", "error", err)
+			return
+		}
+		d.logger.Debug("token renewal failed; will retry on next cycle", "error", err)
+		return
+	}
+	if resp.Renewed {
+		d.logger.Info("auth token renewed", "expires_at", resp.ExpiresAt)
+	} else {
+		d.logger.Debug("auth token not yet eligible for renewal", "expires_at", resp.ExpiresAt)
+	}
 }
 
 // workspaceSyncLoop periodically fetches the user's workspaces from the API
