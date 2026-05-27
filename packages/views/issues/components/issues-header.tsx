@@ -65,10 +65,7 @@ import {
 } from "@multica/core/issues/stores/view-store";
 import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
 import type { SortField, IssueGrouping, SwimlaneGrouping, ViewMode } from "@multica/core/issues/stores/view-store";
-import {
-  useIssuesScopeStore,
-  type IssuesScope,
-} from "@multica/core/issues/stores/issues-scope-store";
+import type { SavedView } from "@multica/core/types";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import type { Issue } from "@multica/core/types";
 import { useT } from "../../i18n";
@@ -160,11 +157,7 @@ function useIssueCounts(allIssues: Issue[]) {
   }, [allIssues]);
 }
 
-// ---------------------------------------------------------------------------
-// Scope config
-// ---------------------------------------------------------------------------
-
-const SCOPE_VALUES: IssuesScope[] = ["all", "members", "agents"];
+// (scope config removed — views now drive the tabs)
 
 // ---------------------------------------------------------------------------
 // Actor sub-menu content (shared between Assignee and Creator)
@@ -501,63 +494,44 @@ function LabelSubContent({
 export function IssuesHeader({
   scopedIssues,
   allowGantt = false,
+  views,
+  activeViewId,
+  onSelectView,
 }: {
   scopedIssues: Issue[];
   allowGantt?: boolean;
+  views?: SavedView[];
+  activeViewId?: string | null;
+  onSelectView?: (id: string) => void;
 }) {
   const { t } = useT("issues");
-  const scope = useIssuesScopeStore((s) => s.scope);
-  const setScope = useIssuesScopeStore((s) => s.setScope);
-  // Bind the workspace agents-working chip to the global /issues view
-  // store. Subscribing here keeps the chip presentational and lets
-  // /my-issues bind its own store via a sibling header.
   const agentRunningFilter = useIssueViewStore((s) => s.agentRunningFilter);
   const toggleAgentRunningFilter = useIssueViewStore(
     (s) => s.toggleAgentRunningFilter,
   );
-  // Scope the chip to whatever issues this page is currently showing.
-  // /issues uses the full workspace minus Members/Agents pill filtering;
-  // passing the visible-issue id set lets the chip count match the list
-  // length when the filter is on.
   const scopedIssueIds = useMemo(
     () => new Set(scopedIssues.map((i) => i.id)),
     [scopedIssues],
   );
-  const SCOPE_LABEL_KEY: Record<IssuesScope, "all_label" | "members_label" | "agents_label"> = {
-    all: "all_label",
-    members: "members_label",
-    agents: "agents_label",
-  };
-  const SCOPE_DESC_KEY: Record<IssuesScope, "all_description" | "members_description" | "agents_description"> = {
-    all: "all_description",
-    members: "members_description",
-    agents: "agents_description",
-  };
 
   return (
     <div className="flex h-12 shrink-0 items-center justify-between px-4">
-      {/* Left: scope buttons */}
+      {/* Left: view tabs */}
       <div className="flex items-center gap-1">
-        {SCOPE_VALUES.map((s) => (
-          <Tooltip key={s}>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={
-                    scope === s
-                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                      : "text-muted-foreground"
-                  }
-                  onClick={() => setScope(s)}
-                >
-                  {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
-                </Button>
-              }
-            />
-            <TooltipContent side="bottom">{t(($) => $.scope[SCOPE_DESC_KEY[s]])}</TooltipContent>
-          </Tooltip>
+        {views?.map((v) => (
+          <Button
+            key={v.id}
+            variant="outline"
+            size="sm"
+            className={
+              activeViewId === v.id
+                ? "bg-accent text-accent-foreground hover:bg-accent/80"
+                : "text-muted-foreground"
+            }
+            onClick={() => onSelectView?.(v.id)}
+          >
+            {v.name}
+          </Button>
         ))}
       </div>
 

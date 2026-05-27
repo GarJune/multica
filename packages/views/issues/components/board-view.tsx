@@ -120,6 +120,7 @@ export function BoardView({
   myIssuesScope,
   myIssuesFilter,
   sort,
+  viewFilter,
   projectId,
 }: {
   issues: Issue[];
@@ -135,6 +136,8 @@ export function BoardView({
   myIssuesFilter?: MyIssuesFilter;
   /** Must match the sort the page queried with — embedded in the cache key. */
   sort?: IssueSortParam;
+  /** View-level filter to thread through to load-more so the cache key matches. */
+  viewFilter?: Partial<import("@multica/core/types").ListIssuesParams>;
   /** When set, the per-column "+" pre-fills the project on the create form. */
   projectId?: string;
 }) {
@@ -411,6 +414,7 @@ export function BoardView({
                 childProgressMap={childProgressMap}
                 myIssuesOpts={myIssuesOpts}
                 sort={sort}
+                viewFilter={viewFilter}
                 projectId={projectId}
                 sortLabel={sortLabel}
               />
@@ -449,6 +453,7 @@ export function BoardView({
             hiddenStatuses={hiddenStatuses}
             myIssuesOpts={myIssuesOpts}
             sort={sort}
+            viewFilter={viewFilter}
           />
         )}
       </div>
@@ -520,6 +525,7 @@ const PaginatedBoardColumn = memo(function PaginatedBoardColumn({
   childProgressMap,
   myIssuesOpts,
   sort,
+  viewFilter,
   projectId,
   sortLabel,
 }: {
@@ -529,6 +535,7 @@ const PaginatedBoardColumn = memo(function PaginatedBoardColumn({
   childProgressMap?: Map<string, ChildProgress>;
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   sort?: IssueSortParam;
+  viewFilter?: Partial<import("@multica/core/types").ListIssuesParams>;
   projectId?: string;
   sortLabel?: string | null;
 }) {
@@ -536,6 +543,7 @@ const PaginatedBoardColumn = memo(function PaginatedBoardColumn({
     group.status,
     myIssuesOpts,
     sort,
+    viewFilter,
   );
   return (
     <BoardColumn
@@ -566,12 +574,14 @@ function BoardHiddenColumnRow({
   status,
   myIssuesOpts,
   sort,
+  viewFilter,
 }: {
   status: IssueStatus;
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   sort?: IssueSortParam;
+  viewFilter?: Partial<import("@multica/core/types").ListIssuesParams>;
 }) {
-  const { total } = useLoadMoreByStatus(status, myIssuesOpts, sort);
+  const { total } = useLoadMoreByStatus(status, myIssuesOpts, sort, viewFilter);
   return <HiddenColumnRow status={status} total={total} />;
 }
 
@@ -579,10 +589,12 @@ function BoardHiddenColumnsPanel({
   hiddenStatuses,
   myIssuesOpts,
   sort,
+  viewFilter,
 }: {
   hiddenStatuses: IssueStatus[];
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   sort?: IssueSortParam;
+  viewFilter?: Partial<import("@multica/core/types").ListIssuesParams>;
 }) {
   return (
     <HiddenColumnsPanel
@@ -593,6 +605,7 @@ function BoardHiddenColumnsPanel({
           status={status}
           myIssuesOpts={myIssuesOpts}
           sort={sort}
+          viewFilter={viewFilter}
         />
       )}
     />

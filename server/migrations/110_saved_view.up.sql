@@ -25,6 +25,4 @@ CREATE UNIQUE INDEX idx_saved_view_unique ON saved_view(
 CREATE INDEX idx_saved_view_workspace ON saved_view(workspace_id);
 CREATE INDEX idx_saved_view_page ON saved_view(workspace_id, page);
 
--- Performance indexes for involves queries and creator filter
-CREATE INDEX idx_agent_owner ON agent(workspace_id, owner_id);
-CREATE INDEX idx_issue_creator ON issue(workspace_id, creator_id);
+-- Hot-table performance indexes moved to migration 111 (CONCURRENTLY).

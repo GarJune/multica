@@ -3,23 +3,24 @@
 import { useMemo } from "react";
 import { useStore } from "zustand";
 import { Button } from "@multica/ui/components/ui/button";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
-import type { Issue } from "@multica/core/types";
-import { myIssuesViewStore, type MyIssuesScope } from "@multica/core/issues/stores/my-issues-view-store";
+import type { Issue, SavedView } from "@multica/core/types";
+import { myIssuesViewStore } from "@multica/core/issues/stores/my-issues-view-store";
 import { useT } from "../../i18n";
 import { WorkspaceAgentWorkingChip } from "../../issues/components/workspace-agent-working-chip";
 import { IssueDisplayControls } from "../../issues/components/issues-header";
 
-export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
-  const { t } = useT("my-issues");
+export function MyIssuesHeader({
+  allIssues,
+  views,
+  activeViewId,
+  onSelectView,
+}: {
+  allIssues: Issue[];
+  views?: SavedView[];
+  activeViewId?: string | null;
+  onSelectView?: (id: string) => void;
+}) {
   const { t: tIssues } = useT("issues");
-  const SCOPES: { value: MyIssuesScope; label: string; description: string }[] = [
-    { value: "all", label: t(($) => $.header.scope.all_label), description: t(($) => $.header.scope.all_description) },
-    { value: "assigned", label: t(($) => $.header.scope.assigned_label), description: t(($) => $.header.scope.assigned_description) },
-    { value: "created", label: t(($) => $.header.scope.created_label), description: t(($) => $.header.scope.created_description) },
-    { value: "agents", label: t(($) => $.header.scope.agents_label), description: t(($) => $.header.scope.agents_description) },
-  ];
-  const scope = useStore(myIssuesViewStore, (s) => s.scope);
   const agentRunningFilter = useStore(myIssuesViewStore, (s) => s.agentRunningFilter);
   const act = myIssuesViewStore.getState();
   const scopedIssueIds = useMemo(
@@ -30,26 +31,20 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   return (
     <div className="flex h-12 shrink-0 items-center justify-between px-4">
       <div className="flex items-center gap-1">
-        {SCOPES.map((s) => (
-          <Tooltip key={s.value}>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={
-                    scope === s.value
-                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                      : "text-muted-foreground"
-                  }
-                  onClick={() => act.setScope(s.value)}
-                >
-                  {s.label}
-                </Button>
-              }
-            />
-            <TooltipContent side="bottom">{s.description}</TooltipContent>
-          </Tooltip>
+        {views?.map((v) => (
+          <Button
+            key={v.id}
+            variant="outline"
+            size="sm"
+            className={
+              activeViewId === v.id
+                ? "bg-accent text-accent-foreground hover:bg-accent/80"
+                : "text-muted-foreground"
+            }
+            onClick={() => onSelectView?.(v.id)}
+          >
+            {v.name}
+          </Button>
         ))}
       </div>
 

@@ -86,14 +86,14 @@ type defaultViewDef struct {
 var defaultViewsByPage = map[string][]defaultViewDef{
 	"issues": {
 		{Name: "All", Filters: `{}`, Position: 1, IsDefault: true},
-		{Name: "Members", Filters: `{"assigneeType":["member"]}`, Position: 2, IsDefault: false},
-		{Name: "Agents", Filters: `{"assigneeType":["agent","squad"]}`, Position: 3, IsDefault: false},
+		{Name: "Members", Filters: `{"assignee_type":["member"]}`, Position: 2, IsDefault: false},
+		{Name: "Agents", Filters: `{"assignee_type":["agent","squad"]}`, Position: 3, IsDefault: false},
 	},
 	"my_issues": {
 		{Name: "All", Filters: `{"involves":"{me}"}`, Position: 1, IsDefault: true},
 		{Name: "Assigned", Filters: `{"assignee":"{me}"}`, Position: 2, IsDefault: false},
 		{Name: "Created", Filters: `{"creator":"{me}"}`, Position: 3, IsDefault: false},
-		{Name: "My Agents", Filters: `{"involves":"{me}","assigneeType":["agent","squad"]}`, Position: 4, IsDefault: false},
+		{Name: "My Agents", Filters: `{"involves":"{me}","assignee_type":["agent","squad"]}`, Position: 4, IsDefault: false},
 	},
 	"project": {
 		{Name: "All", Filters: `{}`, Position: 1, IsDefault: true},
@@ -129,6 +129,12 @@ func (h *Handler) ListViews(w http.ResponseWriter, r *http.Request) {
 	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
 		pid, ok := parseUUIDOrBadRequest(w, projectID, "project_id")
 		if !ok {
+			return
+		}
+		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+			ID: pid, WorkspaceID: wsUUID,
+		}); err != nil {
+			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
 		params.ProjectID = pid
@@ -218,6 +224,12 @@ func (h *Handler) CreateView(w http.ResponseWriter, r *http.Request) {
 	if req.ProjectID != nil {
 		pid, ok := parseUUIDOrBadRequest(w, *req.ProjectID, "project_id")
 		if !ok {
+			return
+		}
+		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+			ID: pid, WorkspaceID: wsUUID,
+		}); err != nil {
+			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
 		params.ProjectID = pid
@@ -390,6 +402,16 @@ func (h *Handler) ReorderViews(w http.ResponseWriter, r *http.Request) {
 	for _, item := range req.Items {
 		itemUUID, ok := parseUUIDOrBadRequest(w, item.ID, "items[].id")
 		if !ok {
+			return
+		}
+		existing, err := h.Queries.GetSavedView(r.Context(), db.GetSavedViewParams{
+			ID: itemUUID, WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "view not found")
+			return
+		}
+		if !h.canManageView(w, r, existing) {
 			return
 		}
 		if err := h.Queries.UpdateSavedViewPosition(r.Context(), db.UpdateSavedViewPositionParams{

@@ -60,6 +60,7 @@ export function ListView({
   projectId,
   onMoveIssue,
   sort,
+  viewFilter,
 }: {
   issues: Issue[];
   visibleStatuses: IssueStatus[];
@@ -69,6 +70,7 @@ export function ListView({
   projectId?: string;
   onMoveIssue?: (issueId: string, updates: DragMoveUpdates, onSettled?: () => void) => void;
   sort?: IssueSortParam;
+  viewFilter?: Partial<import("@multica/core/types").ListIssuesParams>;
 }) {
   const listCollapsedStatuses = useViewStore(
     (s) => s.listCollapsedStatuses
@@ -312,6 +314,7 @@ export function ListView({
             isExpanded={isExpanded}
             sortLabel={sortLabel}
             sort={sort}
+            viewFilter={viewFilter}
           />
         );
       })}
@@ -361,6 +364,7 @@ function StatusAccordionItem({
   isExpanded,
   sortLabel,
   sort,
+  viewFilter,
 }: {
   status: IssueStatus;
   issueIds: string[];
@@ -372,6 +376,7 @@ function StatusAccordionItem({
   isExpanded: boolean;
   sortLabel: string | null;
   sort?: IssueSortParam;
+  viewFilter?: Partial<import("@multica/core/types").ListIssuesParams>;
 }) {
   const { t } = useT("issues");
   const selectedIds = useIssueSelectionStore((s) => s.selectedIds);
@@ -381,6 +386,7 @@ function StatusAccordionItem({
     status,
     myIssuesOpts,
     sort,
+    viewFilter,
   );
 
   const issues = useMemo(

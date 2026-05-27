@@ -26,7 +26,7 @@ import {
 } from "./delete-cache";
 import { useWorkspaceId } from "../hooks";
 import { useRecentIssuesStore } from "./stores";
-import type { GroupedIssuesResponse, Issue, IssueAssigneeGroup, IssueReaction, IssueStatus } from "../types";
+import type { GroupedIssuesResponse, Issue, IssueAssigneeGroup, IssueReaction, IssueStatus, ListIssuesParams } from "../types";
 import type {
   CreateIssueRequest,
   UpdateIssueRequest,
@@ -70,6 +70,7 @@ export function useLoadMoreByStatus(
   status: IssueStatus,
   myIssues?: { scope: string; filter: MyIssuesFilter },
   sort?: IssueSortParam,
+  viewFilter?: Partial<ListIssuesParams>,
 ) {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
@@ -77,7 +78,7 @@ export function useLoadMoreByStatus(
 
   const activeKey = myIssues
     ? issueKeys.myListSorted(wsId, myIssues.scope, myIssues.filter, sort)
-    : issueKeys.listSorted(wsId, sort);
+    : issueKeys.listSorted(wsId, viewFilter, sort);
   const cache = qc.getQueryData<ListIssuesCache>(activeKey);
   const bucket = cache?.byStatus[status];
   const loaded = bucket?.issues.length ?? 0;
@@ -94,6 +95,7 @@ export function useLoadMoreByStatus(
         offset: loaded,
         ...sort,
         ...myIssues?.filter,
+        ...viewFilter,
       });
       qc.setQueryData<ListIssuesCache>(activeKey, (old) => {
         if (!old) return old;

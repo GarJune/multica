@@ -78,7 +78,7 @@ describe("useLoadMoreByStatus", () => {
 
   it("targets the sorted cache key and forwards sort to the API", async () => {
     const sort: IssueSortParam = { sort_by: "priority", sort_direction: "desc" };
-    const activeKey = issueKeys.listSorted(WS_ID, sort);
+    const activeKey = issueKeys.listSorted(WS_ID, undefined, sort);
     const seed: ListIssuesCache = {
       byStatus: {
         todo: { issues: [makeIssue(1)], total: 3 },
@@ -123,13 +123,13 @@ describe("useLoadMoreByStatus", () => {
   it("ignores a stale cache entry under a different sort", async () => {
     // Stale entry from a previous sort lingers (kept by gcTime / keepPreviousData).
     const staleSort: IssueSortParam = { sort_by: "priority", sort_direction: "desc" };
-    qc.setQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, staleSort), {
+    qc.setQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, undefined, staleSort), {
       byStatus: { todo: { issues: [makeIssue(99)], total: 99 } },
     });
 
     // The active sort cache has its own bucket — load-more must target THIS one.
     const activeSort: IssueSortParam = { sort_by: "position", sort_direction: undefined };
-    const activeKey = issueKeys.listSorted(WS_ID, activeSort);
+    const activeKey = issueKeys.listSorted(WS_ID, undefined, activeSort);
     qc.setQueryData<ListIssuesCache>(activeKey, {
       byStatus: { todo: { issues: [makeIssue(1)], total: 2 } },
     });
@@ -162,7 +162,7 @@ describe("useLoadMoreByStatus", () => {
     ]);
 
     // Stale cache is untouched.
-    const stale = qc.getQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, staleSort));
+    const stale = qc.getQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, undefined, staleSort));
     expect(stale?.byStatus.todo?.issues.map((i) => i.id)).toEqual(["issue-99"]);
   });
 

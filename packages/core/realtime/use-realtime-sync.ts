@@ -21,6 +21,7 @@ import {
   agentTasksKeys,
 } from "../agents/queries";
 import { githubKeys } from "../github/queries";
+import { viewKeys } from "../views/queries";
 import {
   onIssueCreated,
   onIssueUpdated,
@@ -298,6 +299,10 @@ export function useRealtimeSync(
       github_installation: () => {
         const wsId = getCurrentWsId();
         if (wsId) qc.invalidateQueries({ queryKey: githubKeys.installations(wsId) });
+      },
+      view: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: viewKeys.all(wsId) });
       },
       pull_request: () => {
         // PR list is keyed by issue id, not workspace, so we invalidate all
