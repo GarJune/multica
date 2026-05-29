@@ -26,8 +26,13 @@ func createViewAs(t *testing.T, userID string, body map[string]any) (*httptest.R
 
 func listViews(t *testing.T, query string) []ViewResponse {
 	t.Helper()
+	return listViewsAs(t, testUserID, query)
+}
+
+func listViewsAs(t *testing.T, userID, query string) []ViewResponse {
+	t.Helper()
 	w := httptest.NewRecorder()
-	testHandler.ListViews(w, newRequest("GET", "/api/views?"+query, nil))
+	testHandler.ListViews(w, newRequestAs(userID, "GET", "/api/views?"+query, nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("ListViews(%s): expected 200, got %d: %s", query, w.Code, w.Body.String())
 	}
@@ -38,6 +43,15 @@ func listViews(t *testing.T, query string) []ViewResponse {
 		t.Fatalf("decode list views: %v", err)
 	}
 	return resp.Views
+}
+
+func containsViewID(views []ViewResponse, id string) bool {
+	for _, v := range views {
+		if v.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCreateAndListView(t *testing.T) {
@@ -254,5 +268,98 @@ func TestCreateViewAnyOfBranchValidation(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("nested any_of: expected 400, got %d", w.Code)
+	}
+}
+
+// TestCreateViewDefaultsToPrivate pins the product decision that a saved view is
+// private to its creator unless explicitly shared.
+func TestCreateViewDefaultsToPrivate(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	w, view := createViewAs(t, testUserID, map[string]any{
+		"name": fmt.Sprintf("priv%d", time.Now().UnixNano()), "page": "issues",
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if view.Shared {
+		t.Fatalf("new view should default to private (shared=false), got shared=true")
+	}
+}
+
+// TestViewSharedSettable pins that shared is an explicit, settable field on both
+// create and update.
+func TestViewSharedSettable(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	w, view := createViewAs(t, testUserID, map[string]any{
+		"name": fmt.Sprintf("shr%d", time.Now().UnixNano()), "page": "issues",
+		"shared": true,
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create shared: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if !view.Shared {
+		t.Fatalf("created view with shared=true should be shared")
+	}
+
+	// Toggle back to private via update.
+	uw := httptest.NewRecorder()
+	testHandler.UpdateView(uw, withURLParam(newRequestAs(testUserID, "PUT", "/api/views/"+view.ID, map[string]any{
+		"shared": false,
+	}), "id", view.ID))
+	if uw.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", uw.Code, uw.Body.String())
+	}
+	var updated ViewResponse
+	if err := json.NewDecoder(uw.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if updated.Shared {
+		t.Fatalf("view should be private after update shared=false")
+	}
+}
+
+// TestListViewsVisibility pins the visibility model: a member sees their own
+// views (shared or not) plus other members' shared views, but never another
+// member's private views.
+func TestListViewsVisibility(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	f := seedIssueFilterFixture(t) // f.otherUserID is a second workspace member
+	ts := time.Now().UnixNano()
+
+	_, minePrivate := createViewAs(t, testUserID, map[string]any{
+		"name": fmt.Sprintf("mine-priv%d", ts), "page": "issues",
+	})
+	_, mineShared := createViewAs(t, testUserID, map[string]any{
+		"name": fmt.Sprintf("mine-shared%d", ts), "page": "issues", "shared": true,
+	})
+	_, otherPrivate := createViewAs(t, f.otherUserID, map[string]any{
+		"name": fmt.Sprintf("other-priv%d", ts), "page": "issues",
+	})
+
+	// The other member sees their own private view + my shared view, not my private one.
+	otherView := listViewsAs(t, f.otherUserID, "page=issues")
+	if !containsViewID(otherView, otherPrivate.ID) {
+		t.Fatalf("creator should see their own private view")
+	}
+	if !containsViewID(otherView, mineShared.ID) {
+		t.Fatalf("member should see another member's shared view")
+	}
+	if containsViewID(otherView, minePrivate.ID) {
+		t.Fatalf("member must NOT see another member's private view")
+	}
+
+	// I see my own private + shared, not the other member's private view.
+	mineView := listViewsAs(t, testUserID, "page=issues")
+	if !containsViewID(mineView, minePrivate.ID) || !containsViewID(mineView, mineShared.ID) {
+		t.Fatalf("creator should see all of their own views")
+	}
+	if containsViewID(mineView, otherPrivate.ID) {
+		t.Fatalf("must NOT see another member's private view")
 	}
 }

@@ -135,6 +135,7 @@ type CreateViewRequest struct {
 	Filters   json.RawMessage `json:"filters"`
 	Display   json.RawMessage `json:"display"`
 	Position  *float64        `json:"position"`
+	Shared    *bool           `json:"shared"`
 }
 
 type UpdateViewRequest struct {
@@ -142,6 +143,7 @@ type UpdateViewRequest struct {
 	Filters  json.RawMessage `json:"filters"`
 	Display  json.RawMessage `json:"display"`
 	Position *float64        `json:"position"`
+	Shared   *bool           `json:"shared"`
 }
 
 type ReorderViewsRequest struct {
@@ -172,6 +174,14 @@ func (h *Handler) ListViews(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	viewerUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
+	if !ok {
+		return
+	}
 	page := r.URL.Query().Get("page")
 	if !validViewPages[page] {
 		writeError(w, http.StatusBadRequest, "invalid page")
@@ -189,6 +199,7 @@ func (h *Handler) ListViews(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: wsUUID,
 		Page:        page,
 		ProjectID:   projectID,
+		ViewerID:    viewerUUID,
 	})
 	if err != nil {
 		slog.Warn("ListViews failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -259,6 +270,7 @@ func (h *Handler) CreateView(w http.ResponseWriter, r *http.Request) {
 		Filters:     filters,
 		Display:     display,
 		Position:    position,
+		Shared:      req.Shared != nil && *req.Shared,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -346,6 +358,9 @@ func (h *Handler) UpdateView(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Position != nil {
 		params.Position = pgtype.Float8{Float64: *req.Position, Valid: true}
+	}
+	if req.Shared != nil {
+		params.Shared = pgtype.Bool{Bool: *req.Shared, Valid: true}
 	}
 
 	updated, err := h.Queries.UpdateView(r.Context(), params)

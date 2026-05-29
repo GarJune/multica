@@ -8,7 +8,7 @@ CREATE TABLE saved_view (
     filters      JSONB NOT NULL DEFAULT '{}',
     display      JSONB NOT NULL DEFAULT '{}',
     position     FLOAT8 NOT NULL DEFAULT 0,
-    shared       BOOLEAN NOT NULL DEFAULT true,
+    shared       BOOLEAN NOT NULL DEFAULT false,
     is_default   BOOLEAN NOT NULL DEFAULT false,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -13,9 +13,9 @@ import (
 
 const createView = `-- name: CreateView :one
 INSERT INTO saved_view (
-    workspace_id, creator_id, name, page, project_id, filters, display, position
+    workspace_id, creator_id, name, page, project_id, filters, display, position, shared
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id, workspace_id, creator_id, name, page, project_id, filters, display, position, shared, is_default, created_at, updated_at
 `
 
@@ -28,6 +28,7 @@ type CreateViewParams struct {
 	Filters     []byte      `json:"filters"`
 	Display     []byte      `json:"display"`
 	Position    float64     `json:"position"`
+	Shared      bool        `json:"shared"`
 }
 
 func (q *Queries) CreateView(ctx context.Context, arg CreateViewParams) (SavedView, error) {
@@ -40,6 +41,7 @@ func (q *Queries) CreateView(ctx context.Context, arg CreateViewParams) (SavedVi
 		arg.Filters,
 		arg.Display,
 		arg.Position,
+		arg.Shared,
 	)
 	var i SavedView
 	err := row.Scan(
@@ -114,6 +116,7 @@ SELECT id, workspace_id, creator_id, name, page, project_id, filters, display, p
 WHERE workspace_id = $1
   AND page = $2
   AND project_id IS NOT DISTINCT FROM $3::uuid
+  AND (shared OR creator_id = $4::uuid)
 ORDER BY position ASC, created_at ASC
 `
 
@@ -121,10 +124,18 @@ type ListViewsParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	Page        string      `json:"page"`
 	ProjectID   pgtype.UUID `json:"project_id"`
+	ViewerID    pgtype.UUID `json:"viewer_id"`
 }
 
+// A view is visible to a member when it is shared (workspace-wide) or they own
+// it. Private views (shared = false) never leak to other members.
 func (q *Queries) ListViews(ctx context.Context, arg ListViewsParams) ([]SavedView, error) {
-	rows, err := q.db.Query(ctx, listViews, arg.WorkspaceID, arg.Page, arg.ProjectID)
+	rows, err := q.db.Query(ctx, listViews,
+		arg.WorkspaceID,
+		arg.Page,
+		arg.ProjectID,
+		arg.ViewerID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +194,7 @@ UPDATE saved_view SET
     filters = COALESCE($4::jsonb, filters),
     display = COALESCE($5::jsonb, display),
     position = COALESCE($6, position),
+    shared = COALESCE($7, shared),
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, creator_id, name, page, project_id, filters, display, position, shared, is_default, created_at, updated_at
@@ -195,6 +207,7 @@ type UpdateViewParams struct {
 	Filters     []byte        `json:"filters"`
 	Display     []byte        `json:"display"`
 	Position    pgtype.Float8 `json:"position"`
+	Shared      pgtype.Bool   `json:"shared"`
 }
 
 func (q *Queries) UpdateView(ctx context.Context, arg UpdateViewParams) (SavedView, error) {
@@ -205,6 +218,7 @@ func (q *Queries) UpdateView(ctx context.Context, arg UpdateViewParams) (SavedVi
 		arg.Filters,
 		arg.Display,
 		arg.Position,
+		arg.Shared,
 	)
 	var i SavedView
 	err := row.Scan(
