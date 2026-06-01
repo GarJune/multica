@@ -295,7 +295,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.13",
         date: "2026-06-01",
-        title: "Skill Command 更新",
+        title: "Skill 搜索与命令行更新",
         changes: [],
         features: [
           "命令行现在可以搜索 Skill，也可以列出某个 Issue 关联的合并请求，发布检查和自动化排查更方便",

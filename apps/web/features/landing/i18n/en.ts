@@ -295,10 +295,10 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.13",
         date: "2026-06-01",
-        title: "Skill Command Updates",
+        title: "Skill Search and CLI Updates",
         changes: [],
         features: [
-          "The CLI can now search skills and list pull requests linked to an Issue, making release checks and automation audits easier from the terminal",
+          "The CLI can now search Skills and list pull requests linked to an Issue, making release checks and automation audits easier from the terminal",
           "Teams can change squad member roles from the CLI without opening the app",
           "Agent lists can be filtered by runtime machine, so teams can quickly find the agents tied to a device or local service",
           "SMTP relays now support secure SMTPS connections on port 465",
@@ -307,7 +307,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         improvements: [
           "Mobile Issue headers now use cleaner controls that stay easier to reach on small screens",
           "Chat history rows show running states and actions more predictably",
-          "Importing the same skill twice now reports a clear result instead of interrupting the flow",
+          "Importing the same Skill twice now reports a clear result instead of interrupting the flow",
         ],
         fixes: [
           "Replies stay attached to the exact comment they were sent under",
