@@ -163,22 +163,13 @@ describe("RuntimeMachineFilterDropdown", () => {
     // gets the data-testid="agents-runtime-filter-active" marker.
     renderDropdown(machines, "m-local", onChange, counts);
     fireEvent.click(screen.getByTestId("agents-runtime-filter"));
-    const allRow = screen
-      .getByTestId("agents-runtime-filter-active")
-      .closest("button") as HTMLButtonElement;
-    expect(allRow).not.toBeNull();
-    // The "All runtimes" row sits at the top of the menu; fire a click
-    // on the explicit "All runtimes" text instead to make the assertion
-    // unambiguous.
-    const allRuntimesItem = Array.from(
-      document.querySelectorAll("button"),
-    ).find(
-      (button) =>
-        button.textContent?.includes("All runtimes") &&
-        !button.hasAttribute("data-testid"),
-    );
-    expect(allRuntimesItem).toBeDefined();
-    fireEvent.click(allRuntimesItem as HTMLButtonElement);
+    // DropdownMenuItem renders a Base UI Menu.Item (role="menuitem") —
+    // verify the active row registered as a proper menu item, not a
+    // raw <button>.
+    const activeRow = screen.getByTestId("agents-runtime-filter-active");
+    expect(activeRow.getAttribute("role")).toBe("menuitem");
+    // Click the explicit "All runtimes" menu item by its accessible name.
+    fireEvent.click(screen.getByRole("menuitem", { name: /All runtimes/ }));
     expect(onChange).toHaveBeenCalledWith(null);
   });
 
@@ -200,8 +191,27 @@ describe("RuntimeMachineFilterDropdown", () => {
 
     renderDropdown(machines, null, onChange, counts);
     fireEvent.click(screen.getByTestId("agents-runtime-filter"));
-    fireEvent.click(screen.getByText("build-server"));
+    // The machine label is the menu item's accessible name.
+    fireEvent.click(screen.getByRole("menuitem", { name: /build-server/ }));
     expect(onChange).toHaveBeenCalledWith("m-remote");
+  });
+
+  it("registers machine rows as menu items so they participate in keyboard nav / ARIA", () => {
+    // Regression: rows used to be raw <button> elements, which bypassed
+    // the menu's role/typeahead/focus model. With DropdownMenuItem they
+    // should be role="menuitem" and live inside a role="menu" popup.
+    const machines = [makeMachine({ id: "m-local", title: "dev.local" })];
+    const counts = new Map([["m-local", 1]]);
+
+    renderDropdown(machines, null, vi.fn(), counts);
+    fireEvent.click(screen.getByTestId("agents-runtime-filter"));
+
+    const menu = screen.getByRole("menu");
+    expect(menu).toBeTruthy();
+    // Both the "All runtimes" row and the per-machine row are items.
+    const items = screen.getAllByRole("menuitem");
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    expect(items.every((item) => item.getAttribute("role") === "menuitem")).toBe(true);
   });
 
   it("shows the per-machine count next to each item", () => {
@@ -212,7 +222,7 @@ describe("RuntimeMachineFilterDropdown", () => {
     fireEvent.click(screen.getByTestId("agents-runtime-filter"));
 
     // The menu item renders the count via the i18n plural key.
-    const item = screen.getByText("dev.local").closest("button") as HTMLButtonElement;
+    const item = screen.getByRole("menuitem", { name: /dev.local/ });
     expect(item.textContent).toMatch(/7/);
   });
 

@@ -310,25 +310,33 @@ export function AgentsPage({
     [runtimeMachineId, machines],
   );
 
-  // Final cut — availability chip + runtime machine + search.
+  // Machine-scoped list: `inScope` narrowed by the selected runtime
+  // machine, but NOT by the availability chip or search. The
+  // availability row needs this intermediate step so its chips show
+  // counts for "agents on this machine", not "agents on every machine"
+  // — once a machine is selected, the chips further narrow the
+  // already-machine-scoped list. The `inScope.length` total stays
+  // available for the dropdown's "All runtimes" badge (the count the
+  // user would see if they cleared the machine filter).
+  const inScopeOnMachine = useMemo(() => {
+    if (view !== "active") return inScope;
+    if (runtimeMachineId === null) return inScope;
+    return inScope.filter(
+      (a) => runtimeIdToMachineId.get(a.runtime_id) === runtimeMachineId,
+    );
+  }, [inScope, view, runtimeMachineId, runtimeIdToMachineId]);
+
+  // Final cut — availability chip + search. Starts from
+  // `inScopeOnMachine` so a selected machine filter is already
+  // applied; the availability chip and search refine within it.
   const filteredAgents = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return inScope.filter((a) => {
+    return inScopeOnMachine.filter((a) => {
       // Availability chip filter only applies to the Active view —
       // archived agents have no presence to match against.
       if (view === "active" && availabilityFilter !== "all") {
         const detail = presenceMap.get(a.id);
         if (detail?.availability !== availabilityFilter) return false;
-      }
-      // Runtime machine filter only applies to the Active view — the
-      // archived toolbar has no machine dropdown, so an archived agent
-      // would never get selected but might still slip through scope.
-      if (
-        view === "active" &&
-        runtimeMachineId !== null &&
-        runtimeIdToMachineId.get(a.runtime_id) !== runtimeMachineId
-      ) {
-        return false;
       }
       if (q) {
         if (
@@ -342,32 +350,31 @@ export function AgentsPage({
       return true;
     });
   }, [
-    inScope,
+    inScopeOnMachine,
     view,
     availabilityFilter,
     presenceMap,
-    runtimeMachineId,
-    runtimeIdToMachineId,
     search,
   ]);
 
   // Per-availability counts for the chip badges. Computed against
-  // `inScope` (ignoring the availability filter itself) so the numbers
-  // reflect "if I clicked this chip, this many agents would match"
-  // rather than collapsing to 0 for the unselected chips.
+  // `inScopeOnMachine` (ignoring the availability filter itself) so
+  // the numbers reflect "if I clicked this chip, this many agents
+  // would match on the currently-selected machine" rather than
+  // collapsing to 0 for the unselected chips.
   const availabilityCounts = useMemo(() => {
     const counts: Record<AgentAvailability, number> = {
       online: 0,
       unstable: 0,
       offline: 0,
     };
-    for (const a of inScope) {
+    for (const a of inScopeOnMachine) {
       const detail = presenceMap.get(a.id);
       if (!detail) continue;
       counts[detail.availability] += 1;
     }
     return counts;
-  }, [inScope, presenceMap]);
+  }, [inScopeOnMachine, presenceMap]);
 
   const sortedAgents = useMemo(() => {
     const xs = [...filteredAgents];
@@ -573,7 +580,7 @@ export function AgentsPage({
                   value={availabilityFilter}
                   onChange={setAvailabilityFilter}
                   counts={availabilityCounts}
-                  totalCount={inScope.length}
+                  totalCount={inScopeOnMachine.length}
                 />
               </>
             ) : (

@@ -4,6 +4,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import type { RuntimeMachine, RuntimeMachineSection } from "../../runtimes/components/runtime-machines";
@@ -163,16 +164,20 @@ function RuntimeMachineFilterItem({
   count: number;
 }) {
   const { t } = useT("agents");
+  // DropdownMenuItem (Base UI Menu.Item) wires the row into the menu's
+  // keyboard navigation, typeahead, and ARIA role="menuitem" semantics,
+  // and auto-closes the menu on selection (closeOnClick: true). The
+  // visual treatment — selected vs. idle — is layered on top via
+  // `data-active` so it survives focus/hover styling from the base.
   return (
-    <button
-      type="button"
+    <DropdownMenuItem
       onClick={onClick}
       data-active={active || undefined}
       data-testid={active ? "agents-runtime-filter-active" : undefined}
       className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
         active
           ? "bg-accent text-accent-foreground"
-          : "text-foreground hover:bg-muted/60"
+          : "text-foreground hover:bg-muted/60 data-highlighted:bg-muted/60"
       }`}
     >
       <span className="min-w-0 flex-1 truncate">
@@ -186,6 +191,6 @@ function RuntimeMachineFilterItem({
       <span className="font-mono tabular-nums text-muted-foreground/70">
         {t(($) => $.runtime_filter.agent_count, { count })}
       </span>
-    </button>
+    </DropdownMenuItem>
   );
 }
