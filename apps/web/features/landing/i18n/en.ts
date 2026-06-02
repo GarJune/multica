@@ -293,6 +293,35 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
+        version: "0.3.14",
+        date: "2026-06-02",
+        title: "Japanese Support, Skill Shortcuts, and Workspace Logos",
+        changes: [],
+        features: [
+          "Multica now supports Japanese across the app, public site, and documentation, including Japanese settings, docs search, and language-specific font rendering",
+          "Chat can now show a slash menu for choosing an agent Skill, so teams can steer an agent without memorizing exact Skill names",
+          "Workspaces can now use a custom logo that appears in navigation, settings, breadcrumbs, and onboarding surfaces",
+          "Teams can add Skills to an agent from the CLI or API without replacing the agent's existing Skill list",
+          "OpenCode agents now expose thinking variants and carry the selected effort into runs",
+        ],
+        improvements: [
+          "Existing users who skipped the onboarding source question can now answer it later without restarting onboarding",
+          "Retired agents now appear as Archived everywhere instead of looking offline or still active",
+          "Chat history and Issue execution rows have cleaner hover actions with less truncation and overlap",
+          "Project Issue filters now apply the agents-working filter consistently across list, board, and timeline views",
+        ],
+        fixes: [
+          "Users without access can no longer trigger private squad leaders through indirect Issue or comment paths",
+          "Project progress counters and reopened agent work now refresh more reliably",
+          "Desktop and web recover better from blank workspace states, no-access pages, renderer errors, and renderer crashes",
+          "Images and file cards keep rendering when names contain Markdown characters",
+          "Chat, labels, and invitations refresh correctly after a realtime reconnect",
+          "Run-only autopilot tasks, quick-create tasks, and their retries can be cancelled from the activity view",
+          "Skill descriptions with multi-line frontmatter now import and display correctly",
+          "Windows Copilot runs preserve multiline prompts and clean up shell-style custom arguments",
+        ],
+      },
+      {
         version: "0.3.13",
         date: "2026-06-01",
         title: "Skill Search and CLI Updates",
