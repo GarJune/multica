@@ -1,4 +1,4 @@
--- Reverse of 112_skill_origin_identity, in reverse order.
+-- Reverse of 113_skill_origin_identity, in reverse order.
 --
 -- KNOWN ONE-WAY RISK: re-adding UNIQUE(workspace_id, name) can FAIL if, while
 -- the origin identity was active, two skills with the same name but different
