@@ -590,10 +590,31 @@ func mergeEnv(base []string, extra map[string]string) []string {
 	return env
 }
 
+// isFilteredChildEnvKey reports whether an inherited env var is an internal
+// Claude Code runtime/session marker that must NOT leak into the spawned child
+// (otherwise the child mistakes itself for a nested or resumed session, or
+// reuses the parent's temp dir / exec path).
+//
+// It must NOT strip the user-facing CLAUDE_CODE_* configuration namespace
+// (CLAUDE_CODE_GIT_BASH_PATH, CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX,
+// CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...): users set those deliberately and the
+// child needs them. Blanket-stripping the whole prefix is what broke Windows —
+// CLAUDE_CODE_GIT_BASH_PATH was silently removed, so Claude Code could not find
+// bash.exe and exited immediately. Strip internal markers by exact name and let
+// every other CLAUDE_CODE_* var through.
 func isFilteredChildEnvKey(key string) bool {
-	return key == "CLAUDECODE" ||
-		strings.HasPrefix(key, "CLAUDECODE_") ||
-		strings.HasPrefix(key, "CLAUDE_CODE_")
+	switch key {
+	case "CLAUDECODE", // "1" when running inside Claude Code
+		"CLAUDE_CODE_ENTRYPOINT", // entrypoint marker (cli/sdk-cli/...)
+		"CLAUDE_CODE_EXECPATH",   // path to the running CLI binary
+		"CLAUDE_CODE_SESSION_ID", // per-session identifier
+		"CLAUDE_CODE_TMPDIR",     // per-session temp dir
+		"CLAUDE_CODE_SSE_PORT":   // IDE-extension transport port
+		return true
+	}
+	// CLAUDECODE_* (no underscore between CLAUDE and CODE) is wholly internal;
+	// keep stripping it. The user-facing config namespace is CLAUDE_CODE_*.
+	return strings.HasPrefix(key, "CLAUDECODE_")
 }
 
 // blockedArgMode specifies whether a blocked arg takes a value or is standalone.
