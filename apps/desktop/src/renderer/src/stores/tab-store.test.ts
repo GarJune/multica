@@ -320,6 +320,54 @@ describe("useTabStore actions", () => {
   });
 });
 
+describe("closeActiveTabIfClosable (Cmd/Ctrl+W guard — MUL-2987)", () => {
+  it("closes the active tab when it is unpinned and not the only tab", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const closableId = store.addTab("/acme/projects", "Projects", "FolderKanban");
+    store.setActiveTab(closableId);
+
+    store.closeActiveTabIfClosable();
+
+    const s = useTabStore.getState();
+    expect(s.byWorkspace.acme.tabs.some((t) => t.id === closableId)).toBe(false);
+    expect(s.byWorkspace.acme.tabs).toHaveLength(1);
+  });
+
+  it("no-ops on the only tab (never reseeds a default the user didn't ask for)", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const onlyTabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+
+    store.closeActiveTabIfClosable();
+
+    const s = useTabStore.getState();
+    expect(s.byWorkspace.acme.tabs).toHaveLength(1);
+    expect(s.byWorkspace.acme.tabs[0].id).toBe(onlyTabId); // untouched, not reseeded
+  });
+
+  it("no-ops when the active tab is pinned (requires explicit Unpin first)", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    store.addTab("/acme/projects", "Projects", "FolderKanban");
+    const pinnedId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+    store.togglePin(pinnedId);
+    store.setActiveTab(pinnedId);
+
+    store.closeActiveTabIfClosable();
+
+    const s = useTabStore.getState();
+    expect(s.byWorkspace.acme.tabs.some((t) => t.id === pinnedId)).toBe(true);
+    expect(s.byWorkspace.acme.tabs).toHaveLength(2);
+  });
+
+  it("no-ops when no workspace is active", () => {
+    const store = useTabStore.getState();
+    expect(() => store.closeActiveTabIfClosable()).not.toThrow();
+    expect(useTabStore.getState().byWorkspace).toEqual({});
+  });
+});
+
 describe("togglePin", () => {
   it("flips a tab's pinned state", () => {
     const store = useTabStore.getState();

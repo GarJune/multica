@@ -71,11 +71,13 @@ function useNativeNavigationGestures() {
 }
 
 // Cmd/Ctrl+W closes the active tab. The main process owns the keystroke (it
-// must swallow the OS "Close Window" accelerator) and forwards it here.
+// must swallow the OS "Close Window" accelerator) and forwards it here. Uses
+// the guarded close so the shortcut honors the same pinned / only-tab rules
+// as the TabBar's close button — never the unconditional force-close.
 function useCloseActiveTabShortcut() {
   useEffect(() => {
     return window.desktopAPI.onCloseActiveTab(() => {
-      useTabStore.getState().closeActiveTab();
+      useTabStore.getState().closeActiveTabIfClosable();
     });
   }, []);
 }

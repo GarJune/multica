@@ -97,6 +97,15 @@ interface TabStore {
    */
   closeActiveTab: () => void;
   /**
+   * Close the active tab in response to the user Cmd/Ctrl+W shortcut. Mirrors
+   * the TabBar's close-affordance rules (tab-bar.tsx `showCloseButton`):
+   * no-ops when the active tab is pinned or is the only tab in its workspace,
+   * so the shortcut can never destroy a tab the UI intentionally exposes no
+   * close button for. Distinct from closeActiveTab(), which is an
+   * unconditional force-close reserved for route-crash recovery.
+   */
+  closeActiveTabIfClosable: () => void;
+  /**
    * Reorder within the active workspace's group only. Clamped so a tab can
    * never cross the pinned / unpinned boundary — a drag that would move a
    * pinned tab into the unpinned zone (or vice versa) is dropped at the
@@ -515,6 +524,20 @@ export const useTabStore = create<TabStore>()(
         const group = byWorkspace[activeWorkspaceSlug];
         if (!group) return;
         closeTab(group.activeTabId);
+      },
+
+      closeActiveTabIfClosable() {
+        const { activeWorkspaceSlug, byWorkspace, closeTab } = get();
+        if (!activeWorkspaceSlug) return;
+        const group = byWorkspace[activeWorkspaceSlug];
+        if (!group) return;
+        // Match the TabBar close-button guard: the sole tab never closes
+        // (its X is hidden; closing would reseed a default the user didn't
+        // ask for) and pinned tabs require an explicit Unpin first.
+        if (group.tabs.length === 1) return;
+        const active = group.tabs.find((t) => t.id === group.activeTabId);
+        if (!active || active.pinned) return;
+        closeTab(active.id);
       },
 
       moveTab(fromIndex, toIndex) {
