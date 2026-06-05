@@ -119,7 +119,6 @@ function ReplyInput({
         {...dropZoneProps}
         className={cn(
           "relative min-w-0 flex-1 flex flex-col",
-          size === "sm" ? "max-h-40" : "max-h-56",
           !isEmpty && "pb-7",
         )}
       >
@@ -152,7 +151,12 @@ function ReplyInput({
             type="button"
             disabled={isEmpty || submitting}
             onClick={handleSubmit}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            className={cn(
+              "inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors disabled:pointer-events-none disabled:opacity-50",
+              isEmpty
+                ? "text-muted-foreground hover:bg-accent hover:text-foreground"
+                : "bg-primary text-primary-foreground hover:bg-primary/90",
+            )}
           >
             {submitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />

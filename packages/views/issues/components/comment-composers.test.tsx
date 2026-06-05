@@ -120,7 +120,7 @@ describe("comment composers", () => {
     expect(container.querySelectorAll("button")).toHaveLength(2);
 
     const shell = screen.getByTestId("drop-zone");
-    expect(shell).toHaveClass("max-h-56");
+    expect(shell.className).not.toMatch(/max-h-/);
     expect(shell.className).not.toContain("h-[70vh]");
   });
 
@@ -132,19 +132,18 @@ describe("comment composers", () => {
     expect(container.querySelectorAll("button")).toHaveLength(2);
 
     const shell = screen.getByTestId("drop-zone");
-    expect(shell).toHaveClass("max-h-40");
+    expect(shell.className).not.toMatch(/max-h-/);
     expect(shell.className).not.toContain("h-[60vh]");
   });
 
-  it("keeps default-size replies on the default auto-grow cap", () => {
+  it("lets default-size replies grow without a height cap", () => {
     const { container } = renderReplyInput({ size: "default" });
 
     expect(screen.getByPlaceholderText("Leave a reply...")).toBeInTheDocument();
     expect(container.querySelectorAll("button")).toHaveLength(2);
 
     const shell = screen.getByTestId("drop-zone");
-    expect(shell).toHaveClass("max-h-56");
-    expect(shell.className).not.toContain("h-[60vh]");
+    expect(shell.className).not.toMatch(/max-h-/);
   });
 
   it("keeps main comment submission wired after removing expand", async () => {
