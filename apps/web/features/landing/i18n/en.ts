@@ -295,9 +295,11 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.17",
         date: "2026-06-05",
-        title: "Usage Scheduling, CLI, and Issue Improvements",
+        title: "Feishu Bot Group Chat, Usage Scheduling, and Issue Improvements",
         changes: [],
         features: [
+          "Feishu Bot group mentions now include nearby conversation context, so the responding agent can understand what the team was discussing before it was mentioned",
+          "Admins can disconnect a Feishu Bot directly from the agent integrations area without detouring through Settings",
           "Self-hosted workspaces now keep usage rollups running without requiring a separate cron setup",
           "The CLI can create and update agents from external MCP configuration files",
         ],
@@ -317,6 +319,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "Inbox notification mute checks and desktop notification routing now respect the source workspace",
           "GitHub installations now show the connected account name right after installation",
           "Model discovery waits consistently and does not hide available choices after an empty result",
+          "Self-hosted Feishu environment variables are accepted correctly",
         ],
       },
       {
