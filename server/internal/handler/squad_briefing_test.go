@@ -124,7 +124,7 @@ func TestBuildSquadLeaderBriefing_FullSquad(t *testing.T) {
 	_ = memberRowID
 	addHumanMember(t, squad.ID, userID, "reviewer")
 
-	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, pgtype.UUID{})
 
 	for _, want := range []string{
 		"## Squad Operating Protocol",
@@ -155,7 +155,7 @@ func TestBuildSquadLeaderBriefing_OnlyLeader(t *testing.T) {
 	leaderID, _ := seededLeaderAgent(t)
 	squad := seedSquadForBriefing(t, leaderID, "Solo Squad", "")
 
-	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, pgtype.UUID{})
 	if !strings.Contains(out, "Members: (none — you are the only member of this squad)") {
 		t.Errorf("expected lone-leader fallback line, got:\n%s", out)
 	}
@@ -179,7 +179,7 @@ func TestBuildSquadLeaderBriefing_SkipsArchivedAgent(t *testing.T) {
 		t.Fatalf("archive agent: %v", err)
 	}
 
-	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, pgtype.UUID{})
 	if strings.Contains(out, "Retired Bot") {
 		t.Errorf("archived agent should not appear in roster:\n%s", out)
 	}
@@ -204,7 +204,7 @@ func TestBuildSquadLeaderBriefing_MentionsRoundTrip(t *testing.T) {
 	_ = memberRowID
 	addHumanMember(t, squad.ID, userID, "")
 
-	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, pgtype.UUID{})
 	mentions := util.ParseMentions(out)
 
 	wantIDs := map[string]string{
@@ -358,5 +358,101 @@ t.Errorf("non-leader claim should NOT contain %q\n--- instructions ---\n%s", mus
 }
 }
 
-// Avoid "imported and not used: pgtype" if helpers above are the only users.
-var _ pgtype.UUID
+// seedSquadIssue creates a squad-assigned issue and returns its UUID.
+func seedSquadIssue(t *testing.T, squadID pgtype.UUID, issueNumber int) pgtype.UUID {
+	t.Helper()
+	ctx := context.Background()
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, status, priority, creator_id, creator_type,
+			assignee_type, assignee_id, number, position
+		) VALUES ($1, 'Exec-state briefing test', 'in_progress', 'medium', $2, 'member',
+			'squad', $3, $4, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID, util.UUIDToString(squadID), issueNumber).Scan(&issueID); err != nil {
+		t.Fatalf("create squad-assigned issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+	return util.MustParseUUID(issueID)
+}
+
+// insertActiveTask inserts a running task on the issue for the given agent and
+// is_leader_task flag, registering cleanup. Mirrors the "agent live" rows the
+// execution-state snapshot reads.
+func insertActiveTask(t *testing.T, agentID string, issueID pgtype.UUID, isLeader bool) {
+	t.Helper()
+	ctx := context.Background()
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+		t.Fatalf("get agent runtime: %v", err)
+	}
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, is_leader_task)
+		VALUES ($1, $2, $3, 'running', 0, $4)
+		RETURNING id
+	`, agentID, runtimeID, util.UUIDToString(issueID), isLeader).Scan(&taskID); err != nil {
+		t.Fatalf("insert active task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+}
+
+// TestBuildSquadLeaderBriefing_ExecutionState verifies the "Current Execution
+// State" snapshot (MUL-3114): the leader must be told whether a *worker*
+// session is running. The leader's own claim must NOT be counted as a worker.
+func TestBuildSquadLeaderBriefing_ExecutionState(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	leaderID, _ := seededLeaderAgent(t)
+	squad := seedSquadForBriefing(t, leaderID, "Exec State Squad", "")
+	issueID := seedSquadIssue(t, squad.ID, 95010)
+
+	// No active task at all → no worker session.
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, issueID)
+	if !strings.Contains(out, "## Current Execution State") {
+		t.Fatalf("expected Current Execution State section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "No worker session is currently running on this issue.") {
+		t.Errorf("expected no-worker-session line, got:\n%s", out)
+	}
+
+	// The leader's own active task must NOT count as a worker session.
+	insertActiveTask(t, leaderID, issueID, true)
+	out = buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, issueID)
+	if !strings.Contains(out, "No worker session is currently running on this issue.") {
+		t.Errorf("leader's own task must not count as a worker session, got:\n%s", out)
+	}
+
+	// A non-leader worker task IS counted, with its name and status.
+	worker := createHandlerTestAgent(t, "Exec Worker", []byte("[]"))
+	insertActiveTask(t, worker, issueID, false)
+	out = buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, issueID)
+	for _, want := range []string{
+		"worker session(s) currently running on this issue.",
+		"Exec Worker",
+		"status `running`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected running-worker briefing to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestBuildSquadLeaderBriefing_NoExecutionStateWithoutIssue — quick-create
+// runs have no issue yet, so the execution-state section is omitted entirely.
+func TestBuildSquadLeaderBriefing_NoExecutionStateWithoutIssue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	leaderID, _ := seededLeaderAgent(t)
+	squad := seedSquadForBriefing(t, leaderID, "No Issue Squad", "")
+
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, pgtype.UUID{})
+	if strings.Contains(out, "## Current Execution State") {
+		t.Errorf("quick-create (no issue) briefing must omit execution state, got:\n%s", out)
+	}
+}
