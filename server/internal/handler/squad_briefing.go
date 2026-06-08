@@ -55,18 +55,11 @@ Your responsibilities, in order:
    - a delegated member posts an update or asks you a question;
    - a delegated member finishes and the issue moves forward;
    - someone @mentions you again on this issue.
-5. **Re-evaluate on each trigger.** When you wake up again, read the new
-   activity and decide whether to delegate the next step, escalate to
-   the human reporter, or close the loop. Before you settle on
-   ` + "`" + `no_action` + "`" + `, consult the **Current Execution State** snapshot
-   below: a delegated agent's task ends the moment it stops producing
-   output, so an interim "I'll continue later" report does NOT mean a
-   session is still running. If no worker session is active and the issue
-   is not actually done, the work has stalled — delegate the next step,
-   mark the issue ` + "`" + `blocked` + "`" + `, or escalate to a human rather than
-   silently recording ` + "`" + `no_action` + "`" + `. Record ` + "`" + `no_action` + "`" + ` and exit
-   silently only when no action genuinely is needed (e.g. a worker is
-   still running, or a member posted an update that requires no response).
+5. **Re-evaluate on each trigger.** Read the new activity and the
+   **Current Execution State** snapshot. If no worker task is active and
+   the issue is not done, delegate the next step, mark ` + "`" + `blocked` + "`" + `, or
+   escalate; do not silently record ` + "`" + `no_action` + "`" + `. Use ` + "`" + `no_action` + "`" + `
+   only when no follow-up is needed.
 
 Hard rules:
 - EVERY delegation MUST use the full mention markdown syntax
@@ -170,12 +163,11 @@ func buildSquadExecutionState(ctx context.Context, q *db.Queries, issueID pgtype
 
 	if len(workers) == 0 {
 		sb.WriteString("**No worker task is currently active on this issue.** ")
-		sb.WriteString("No delegated agent has an active queued, waiting, or running task right now. A worker's task ends the moment it stops producing output, so a recent comment that reads like work is still in progress (\"I'll continue later\", \"still verifying\", a partial/interim report) does NOT mean anything is active — nothing resumes automatically. ")
-		sb.WriteString("Before you record `no_action`, confirm the issue is genuinely done or genuinely waiting on a human. If work remains, delegate the next step, or mark the issue `blocked` and escalate. An interim report with no active session is a stalled issue, not a progressing one.\n")
+		sb.WriteString("Nothing will continue automatically unless you delegate a new step. Before `no_action`, confirm the issue is done or waiting on a human; otherwise delegate, mark `blocked`, or escalate.\n")
 		return sb.String()
 	}
 
-	fmt.Fprintf(&sb, "**%d worker task(s) currently active on this issue.** A delegated agent has queued, waiting, or running work:\n", len(workers))
+	fmt.Fprintf(&sb, "**%d worker task(s) currently active on this issue:**\n", len(workers))
 	for _, t := range workers {
 		name := "a squad member"
 		if ag, err := q.GetAgent(ctx, t.AgentID); err == nil {
@@ -183,7 +175,7 @@ func buildSquadExecutionState(ctx context.Context, q *db.Queries, issueID pgtype
 		}
 		fmt.Fprintf(&sb, "- %s — status `%s`\n", name, t.Status)
 	}
-	sb.WriteString("\nYou usually do NOT need to delegate the same work again while a worker task is in flight — recording `no_action` and waiting for it to finish is appropriate. Re-delegate only if the active work is clearly wrong or stuck, or hand off a genuinely independent next step.\n")
+	sb.WriteString("\nUsually wait for active worker tasks to finish. Re-delegate only if the active work is wrong/stuck or you have an independent next step.\n")
 	return sb.String()
 }
 

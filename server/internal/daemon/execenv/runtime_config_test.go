@@ -172,7 +172,7 @@ func TestBriefCarriesBlockedOnStallGuidance(t *testing.T) {
 	})
 	for _, want := range []string{
 		"Do NOT change the issue status unless the comment explicitly asks for it",
-		"stopping with the task NOT finished",
+		"must stop before the task is finished",
 		"multica issue status " + issueID + " blocked",
 		"blocked_reason",
 	} {
@@ -185,8 +185,8 @@ func TestBriefCarriesBlockedOnStallGuidance(t *testing.T) {
 	// task unfinished and nothing continuing automatically.
 	assignment := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: issueID})
 	for _, want := range []string{
-		"If blocked, run `multica issue status " + issueID + " blocked`",
-		"The same applies when you stop with the task unfinished",
+		"run `multica issue status " + issueID + " blocked`",
+		"must stop with unfinished work",
 		"blocked_reason",
 	} {
 		if !strings.Contains(assignment, want) {
@@ -314,7 +314,8 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 		"Complete the task within your Agent Identity boundaries.",
 		"Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action",
 		"When done, run `multica issue status " + issueID + " in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.",
-		"If blocked, run `multica issue status " + issueID + " blocked` unless your Agent Identity forbids issue status changes.",
+		"If blocked, or if you must stop with unfinished work and no automatic continuation",
+		"run `multica issue status " + issueID + " blocked` unless your Agent Identity forbids status changes.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("assignment-triggered brief missing identity-bound workflow text %q\n---\n%s", want, out)

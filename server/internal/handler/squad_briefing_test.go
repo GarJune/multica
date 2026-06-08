@@ -431,7 +431,7 @@ func TestBuildSquadLeaderBriefing_ExecutionState(t *testing.T) {
 	insertActiveTask(t, worker, issueID, false)
 	out = buildSquadLeaderBriefing(ctx, testHandler.Queries, squad, issueID)
 	for _, want := range []string{
-		"worker task(s) currently active on this issue.",
+		"worker task(s) currently active on this issue:",
 		"Exec Worker",
 		"status `running`",
 	} {
