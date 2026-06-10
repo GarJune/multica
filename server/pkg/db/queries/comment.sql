@@ -381,6 +381,30 @@ UPDATE comment SET
 WHERE id = $1
 RETURNING *;
 
+-- name: LockCommentThreadRoot :one
+-- Serializes resolves within a thread. Under READ COMMITTED, two concurrent
+-- resolves of different comments in the same thread could each miss the
+-- other's uncommitted resolution in ClearOtherThreadResolutions and commit two
+-- resolved rows. Locking the thread root in its OWN statement (before the
+-- clear) makes the loser block here; once the winner commits, the loser's
+-- clear runs as a new statement with a fresh snapshot that sees the winner's
+-- committed resolution and clears it. The lock must be a separate statement —
+-- folding FOR UPDATE into the clear's CTE would not help, because the blocked
+-- statement keeps its pre-wait snapshot for all other rows.
+WITH RECURSIVE root_of AS (
+    SELECT c.id, c.parent_id
+    FROM comment c
+    WHERE c.id = @target_id AND c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    UNION ALL
+    SELECT p.id, p.parent_id
+    FROM comment p
+    JOIN root_of r ON p.id = r.parent_id
+)
+SELECT c.id
+FROM comment c
+WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1)
+FOR UPDATE;
+
 -- name: ClearOtherThreadResolutions :many
 -- Single-resolution invariant: a thread has at most one resolved comment.
 -- Resolving @target_id makes it the sole resolution, so this clears resolved_at
@@ -391,7 +415,8 @@ RETURNING *;
 -- id <> @target_id), never the whole issue. Returns each cleared row so the
 -- handler can emit a comment:unresolved event per row; granular realtime
 -- consumers replace a single comment in place and would otherwise keep
--- displaying the stale resolution.
+-- displaying the stale resolution. Callers MUST run LockCommentThreadRoot
+-- first in the same tx so concurrent resolves in one thread serialize.
 WITH RECURSIVE root_of AS (
     -- Walk up from the target to its thread root.
     SELECT c.id, c.parent_id

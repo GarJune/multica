@@ -63,7 +63,8 @@ type ClearOtherThreadResolutionsParams struct {
 // id <> @target_id), never the whole issue. Returns each cleared row so the
 // handler can emit a comment:unresolved event per row; granular realtime
 // consumers replace a single comment in place and would otherwise keep
-// displaying the stale resolution.
+// displaying the stale resolution. Callers MUST run LockCommentThreadRoot
+// first in the same tx so concurrent resolves in one thread serialize.
 func (q *Queries) ClearOtherThreadResolutions(ctx context.Context, arg ClearOtherThreadResolutionsParams) ([]Comment, error) {
 	rows, err := q.db.Query(ctx, clearOtherThreadResolutions, arg.TargetID, arg.IssueID, arg.WorkspaceID)
 	if err != nil {
@@ -1071,6 +1072,44 @@ func (q *Queries) ListThreadCommentsForIssuePaged(ctx context.Context, arg ListT
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockCommentThreadRoot = `-- name: LockCommentThreadRoot :one
+WITH RECURSIVE root_of AS (
+    SELECT c.id, c.parent_id
+    FROM comment c
+    WHERE c.id = $1 AND c.issue_id = $2 AND c.workspace_id = $3
+    UNION ALL
+    SELECT p.id, p.parent_id
+    FROM comment p
+    JOIN root_of r ON p.id = r.parent_id
+)
+SELECT c.id
+FROM comment c
+WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1)
+FOR UPDATE
+`
+
+type LockCommentThreadRootParams struct {
+	TargetID    pgtype.UUID `json:"target_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Serializes resolves within a thread. Under READ COMMITTED, two concurrent
+// resolves of different comments in the same thread could each miss the
+// other's uncommitted resolution in ClearOtherThreadResolutions and commit two
+// resolved rows. Locking the thread root in its OWN statement (before the
+// clear) makes the loser block here; once the winner commits, the loser's
+// clear runs as a new statement with a fresh snapshot that sees the winner's
+// committed resolution and clears it. The lock must be a separate statement —
+// folding FOR UPDATE into the clear's CTE would not help, because the blocked
+// statement keeps its pre-wait snapshot for all other rows.
+func (q *Queries) LockCommentThreadRoot(ctx context.Context, arg LockCommentThreadRootParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockCommentThreadRoot, arg.TargetID, arg.IssueID, arg.WorkspaceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const resolveComment = `-- name: ResolveComment :one

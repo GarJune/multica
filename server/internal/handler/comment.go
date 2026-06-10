@@ -1400,8 +1400,8 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 // identity, and ok. Resolve / unresolve handlers share this scaffolding so the
 // workspace membership + tenant guard stay identical. Any comment (root or
 // reply) may be resolved: resolving a root collapses the whole thread; resolving
-// a reply marks it as the thread's resolution. Which one is the thread's
-// resolution is a pure frontend derivation, so the backend stays a plain setter.
+// a reply marks it as the thread's resolution. ResolveComment enforces the
+// single-resolution invariant by clearing every other resolution in the thread.
 func (h *Handler) loadCommentForActor(w http.ResponseWriter, r *http.Request) (db.Comment, string, string, string, bool) {
 	commentId := chi.URLParam(r, "commentId")
 	userID, ok := requireUserID(w, r)
@@ -1456,6 +1456,19 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+
+	// Lock the thread root before clearing so concurrent resolves in the same
+	// thread serialize. Without this, two READ COMMITTED txs can each miss the
+	// other's uncommitted resolution and commit two resolved rows.
+	if _, err := qtx.LockCommentThreadRoot(r.Context(), db.LockCommentThreadRootParams{
+		TargetID:    comment.ID,
+		IssueID:     comment.IssueID,
+		WorkspaceID: comment.WorkspaceID,
+	}); err != nil {
+		slog.Warn("lock comment thread root failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve comment")
+		return
+	}
 
 	cleared, err := qtx.ClearOtherThreadResolutions(r.Context(), db.ClearOtherThreadResolutionsParams{
 		TargetID:    comment.ID,
