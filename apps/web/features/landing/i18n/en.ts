@@ -293,6 +293,27 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
+        version: "0.3.21",
+        date: "2026-06-12",
+        title: "CodeBuddy Agents, Safer Chat, and Smoother Issue Creation",
+        changes: [],
+        features: [
+          "CodeBuddy can now run local Multica agents, with its available model and effort choices shown automatically",
+          "Quick-created Issues now keep uploaded files attached from the first draft through the final Issue",
+        ],
+        improvements: [
+          "Skill import conflicts are clearer: locked skills show a person's name instead of an internal ID, and a single overwrite now completes in one click",
+          "Desktop recovery prompts now explain what happened first and give clearer details to include when reporting a stuck window",
+          "Daemon disk usage now points you to other local profiles when the selected profile has no task history",
+          "Views that sort or filter people by signup time can now load faster",
+        ],
+        fixes: [
+          "Chat now keeps messages and drafts in sync when sending, stopping, or recovering from a failed send",
+          "Lark account binding now works reliably for users who are already signed in, and sign-in returns to the binding page",
+          "Local agent runs no longer announce that work has started before the task folder is ready",
+        ],
+      },
+      {
         version: "0.3.20",
         date: "2026-06-11",
         title: "Skill Imports, Cleaner Run History, and Resilient Agents",
