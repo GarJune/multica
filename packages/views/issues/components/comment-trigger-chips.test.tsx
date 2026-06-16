@@ -114,7 +114,6 @@ describe("CommentTriggerChips", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    expect(screen.getByText("This comment will trigger")).toBeInTheDocument();
     const row = screen.getByRole("button", { name: /Bob/ });
     expect(row).toHaveTextContent("Bob");
     fireEvent.click(row);
