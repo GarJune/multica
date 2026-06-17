@@ -1,12 +1,10 @@
 {
-  "title": "개요",
-  "heading": "워크스페이스 개요",
-  "subtitle": "이 워크스페이스의 활동, 프로젝트 변경, 사용량입니다.",
-  "window_label": "최근 {{days}}일",
+  "title": "활동",
+  "heading": "워크스페이스 활동",
+  "subtitle": "이 워크스페이스의 활동과 프로젝트 변경입니다.",
   "tabs": {
     "activity": "타임라인",
-    "wrapup": "요약",
-    "usage": "사용량"
+    "wrapup": "요약"
   },
   "filters": {
     "showing": "표시",
@@ -14,21 +12,6 @@
     "by": "작성자",
     "everyone": "모두",
     "filter_placeholder": "필터..."
-  },
-  "summary": {
-    "cost_label": "비용 - {{days}}일",
-    "runtime_hint": "실행 시간 {{duration}}",
-    "tokens_label": "토큰 - {{days}}일",
-    "tokens_hint": "입력 {{input}} - 출력 {{output}}",
-    "tasks_label": "작업 - {{days}}일",
-    "failed_hint_one": "{{count}}개 실패",
-    "failed_hint_other": "{{count}}개 실패",
-    "open_work_label": "열린 작업",
-    "open_work_hint_one": "작업 중인 agent {{count}}개",
-    "open_work_hint_other": "작업 중인 agent {{count}}개"
-  },
-  "duration": {
-    "less_than_minute": "<1m"
   },
   "dates": {
     "today": "오늘",
@@ -76,21 +59,6 @@
     "done_issues_other": "{{count}}개 완료",
     "resources_one": "리소스 {{count}}개",
     "resources_other": "리소스 {{count}}개"
-  },
-  "usage": {
-    "title": "사용량",
-    "description": "{{days}}일 동안의 agent 비용, 토큰, 실행 시간입니다.",
-    "date_label": "최근 {{days}}일",
-    "agent_count_one": "사용량이 있는 agent {{count}}개",
-    "agent_count_other": "사용량이 있는 agent {{count}}개",
-    "cost": "비용",
-    "tokens": "토큰",
-    "run_time": "실행 시간",
-    "tasks_one": "작업 {{count}}개",
-    "tasks_other": "작업 {{count}}개",
-    "unknown_agent": "알 수 없는 agent",
-    "empty_title": "아직 사용량 없음",
-    "empty_body": "Agent 작업이 완료되면 사용량이 여기에 표시됩니다."
   },
   "status": {
     "agent": {

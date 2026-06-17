@@ -10,7 +10,7 @@ import {
 // needs to be rewritten to /{slug}/{route}/... so old bookmarks, deep links,
 // and post-revert-and-reapply users don't hit 404.
 const LEGACY_ROUTE_SEGMENTS = new Set([
-  "overview",
+  "activity",
   "issues",
   "projects",
   "agents",
@@ -76,7 +76,7 @@ export function proxy(req: NextRequest) {
   // --- Root path: redirect logged-in users to their last workspace ---
   if (pathname === "/" && hasSession && lastSlug) {
     const url = req.nextUrl.clone();
-    url.pathname = `/${lastSlug}/overview`;
+    url.pathname = `/${lastSlug}/issues`;
     return NextResponse.redirect(url);
   }
 

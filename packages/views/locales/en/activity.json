@@ -1,12 +1,10 @@
 {
-  "title": "Overview",
-  "heading": "Workspace Overview",
-  "subtitle": "Activity, project changes, and usage across this workspace.",
-  "window_label": "Last {{days}} days",
+  "title": "Activity",
+  "heading": "Workspace Activity",
+  "subtitle": "Activity and project changes across this workspace.",
   "tabs": {
     "activity": "Timeline",
-    "wrapup": "Wrap-up",
-    "usage": "Usage"
+    "wrapup": "Wrap-up"
   },
   "filters": {
     "showing": "Showing",
@@ -14,21 +12,6 @@
     "by": "by",
     "everyone": "Everyone",
     "filter_placeholder": "Filter..."
-  },
-  "summary": {
-    "cost_label": "Cost - {{days}}D",
-    "runtime_hint": "{{duration}} run time",
-    "tokens_label": "Tokens - {{days}}D",
-    "tokens_hint": "Input {{input}} - Output {{output}}",
-    "tasks_label": "Tasks - {{days}}D",
-    "failed_hint_one": "{{count}} failed",
-    "failed_hint_other": "{{count}} failed",
-    "open_work_label": "Open work",
-    "open_work_hint_one": "{{count}} working agent",
-    "open_work_hint_other": "{{count}} working agents"
-  },
-  "duration": {
-    "less_than_minute": "<1m"
   },
   "dates": {
     "today": "Today",
@@ -76,21 +59,6 @@
     "done_issues_other": "{{count}} done",
     "resources_one": "{{count}} resource",
     "resources_other": "{{count}} resources"
-  },
-  "usage": {
-    "title": "Usage",
-    "description": "Agent cost, tokens, and run time over {{days}} days.",
-    "date_label": "Last {{days}} days",
-    "agent_count_one": "{{count}} agent reported usage",
-    "agent_count_other": "{{count}} agents reported usage",
-    "cost": "Cost",
-    "tokens": "Tokens",
-    "run_time": "Run time",
-    "tasks_one": "{{count}} task",
-    "tasks_other": "{{count}} tasks",
-    "unknown_agent": "Unknown agent",
-    "empty_title": "No usage yet",
-    "empty_body": "Agent usage will appear here after tasks complete."
   },
   "status": {
     "agent": {

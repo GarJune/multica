@@ -132,11 +132,12 @@ interface TabStore {
 const ROUTE_ICONS: Record<string, string> = {
   inbox: "Inbox",
   "my-issues": "CircleUser",
-  overview: "BarChart3",
   issues: "ListTodo",
   projects: "FolderKanban",
   autopilots: "ListTodo",
   agents: "Bot",
+  usage: "BarChart3",
+  activity: "Activity",
   runtimes: "Monitor",
   skills: "BookOpenText",
   settings: "Settings",
@@ -232,14 +233,14 @@ function pinnedBoundary(tabs: Tab[]): number {
   return i;
 }
 
-/** Default entry point for a workspace — its overview. */
+/** Default entry point for a workspace — its issues list. */
 function defaultPathFor(slug: string): string {
-  return `/${slug}/overview`;
+  return `/${slug}/issues`;
 }
 
 function defaultTabFor(slug: string): Tab {
   const path = defaultPathFor(slug);
-  return makeTab(path, "Overview", resolveRouteIcon(path));
+  return makeTab(path, "Issues", resolveRouteIcon(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +286,7 @@ export const useTabStore = create<TabStore>()(
             desiredPath && sanitizeTabPath(desiredPath) === desiredPath
               ? desiredPath
               : defaultPathFor(slug);
-          const tab = makeTab(seedPath, seedPath === defaultPathFor(slug) ? "Overview" : "Issues", resolveRouteIcon(seedPath));
+          const tab = makeTab(seedPath, "Issues", resolveRouteIcon(seedPath));
           set({
             activeWorkspaceSlug: slug,
             byWorkspace: {
@@ -312,7 +313,7 @@ export const useTabStore = create<TabStore>()(
               });
               return;
             }
-            const tab = makeTab(clean, clean === defaultPathFor(slug) ? "Overview" : "Issues", resolveRouteIcon(clean));
+            const tab = makeTab(clean, "Issues", resolveRouteIcon(clean));
             set({
               activeWorkspaceSlug: slug,
               byWorkspace: {

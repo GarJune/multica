@@ -2,13 +2,13 @@
   "nav": {
     "inbox": "インボックス",
     "my_issues": "マイイシュー",
-    "overview": "概要",
     "issues": "イシュー",
     "projects": "プロジェクト",
     "autopilots": "オートパイロット",
     "agents": "エージェント",
     "squads": "スクワッド",
     "usage": "使用量",
+    "activity": "アクティビティ",
     "runtimes": "ランタイム",
     "skills": "スキル",
     "settings": "設定"

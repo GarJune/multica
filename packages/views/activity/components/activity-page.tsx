@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import {
-  BarChart3,
+  Activity,
   Bot,
   Clock3,
   FolderKanban,
@@ -23,38 +23,20 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { issueListOptions } from "@multica/core/issues/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import {
-  dashboardAgentRunTimeOptions,
-  dashboardUsageByAgentOptions,
-  dashboardUsageDailyOptions,
-} from "@multica/core/dashboard";
-import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import type { Agent, Issue, Project } from "@multica/core/types";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
 import { PageHeader } from "../../layout/page-header";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
-import { useViewingTimezone } from "../../common/use-viewing-timezone";
-import {
-  aggregateAgentTokens,
-  computeDailyTotals,
-  formatDuration,
-  mergeAgentDashboardRows,
-} from "../../dashboard/utils";
-import { formatTokens } from "../../runtimes/utils";
 
-const USAGE_DAYS = 30;
 const EMPTY_ISSUES: Issue[] = [];
 const EMPTY_PROJECTS: Project[] = [];
 const EMPTY_AGENTS: Agent[] = [];
-const EMPTY_DAILY: import("@multica/core/types").DashboardUsageDaily[] = [];
-const EMPTY_BY_AGENT: import("@multica/core/types").DashboardUsageByAgent[] = [];
-const EMPTY_RUNTIME: import("@multica/core/types").DashboardAgentRunTime[] = [];
 
 type IconComponent = ComponentType<{ className?: string }>;
 type ActivityKind = "issue" | "project" | "agent";
-type OverviewT = ReturnType<typeof useT<"overview">>["t"];
+type ActivityT = ReturnType<typeof useT<"activity">>["t"];
 
 interface ActivityItem {
   id: string;
@@ -75,12 +57,6 @@ interface ActivityGroup {
   items: ActivityItem[];
 }
 
-interface RuntimeTotals {
-  seconds: number;
-  taskCount: number;
-  failedCount: number;
-}
-
 interface ProjectWrapRow {
   id: string;
   project: Project | null;
@@ -89,12 +65,6 @@ interface ProjectWrapRow {
   issueCount: number;
   doneCount: number;
   resourceCount: number;
-}
-
-function formatMoney(n: number): string {
-  if (!Number.isFinite(n)) return "$0.00";
-  if (n >= 100) return `$${n.toFixed(0)}`;
-  return `$${n.toFixed(2)}`;
 }
 
 function isOpenIssue(issue: Issue): boolean {
@@ -140,65 +110,25 @@ function issueDisplayTitle(issue: Issue): string {
   return issue.identifier ? `${issue.identifier} ${issue.title}` : issue.title;
 }
 
-export function OverviewPage() {
-  const { t } = useT("overview");
+export function ActivityPage() {
+  const { t } = useT("activity");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const timeAgo = useTimeAgo();
-  const viewTZ = useViewingTimezone();
   const [projectFilter, setProjectFilter] = useState("all");
   const [query, setQuery] = useState("");
-
-  useCustomPricingStore((s) => s.pricings);
 
   const issuesQuery = useQuery(issueListOptions(wsId));
   const projectsQuery = useQuery(projectListOptions(wsId));
   const agentsQuery = useQuery(agentListOptions(wsId));
-  const dailyQuery = useQuery(
-    dashboardUsageDailyOptions(wsId, USAGE_DAYS, null, viewTZ),
-  );
-  const byAgentQuery = useQuery(
-    dashboardUsageByAgentOptions(wsId, USAGE_DAYS, null, viewTZ),
-  );
-  const runTimeQuery = useQuery(
-    dashboardAgentRunTimeOptions(wsId, USAGE_DAYS, null, viewTZ),
-  );
 
   const issues = issuesQuery.data ?? EMPTY_ISSUES;
   const projects = projectsQuery.data ?? EMPTY_PROJECTS;
   const agents = agentsQuery.data ?? EMPTY_AGENTS;
-  const dailyUsage = dailyQuery.data ?? EMPTY_DAILY;
-  const byAgentUsage = byAgentQuery.data ?? EMPTY_BY_AGENT;
-  const runTimeRows = runTimeQuery.data ?? EMPTY_RUNTIME;
 
   const projectById = useMemo(
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
-  );
-  const agentById = useMemo(
-    () => new Map(agents.map((agent) => [agent.id, agent] as const)),
-    [agents],
-  );
-
-  const tokenTotals = useMemo(
-    () => computeDailyTotals(dailyUsage),
-    [dailyUsage],
-  );
-  const runtimeTotals = useMemo(
-    () =>
-      runTimeRows.reduce<RuntimeTotals>(
-        (acc, row) => ({
-          seconds: acc.seconds + row.total_seconds,
-          taskCount: acc.taskCount + row.task_count,
-          failedCount: acc.failedCount + row.failed_count,
-        }),
-        { seconds: 0, taskCount: 0, failedCount: 0 },
-      ),
-    [runTimeRows],
-  );
-  const agentRows = useMemo(
-    () => mergeAgentDashboardRows(aggregateAgentTokens(byAgentUsage), runTimeRows),
-    [byAgentUsage, runTimeRows],
   );
 
   const activityItems = useMemo(() => {
@@ -341,22 +271,15 @@ export function OverviewPage() {
       .slice(0, 8);
   }, [issues, projectById, projects]);
 
-  const usageLoading =
-    dailyQuery.isLoading || byAgentQuery.isLoading || runTimeQuery.isLoading;
   const activityLoading =
     issuesQuery.isLoading || projectsQuery.isLoading || agentsQuery.isLoading;
-  const totalTokens =
-    tokenTotals.input +
-    tokenTotals.output +
-    tokenTotals.cacheRead +
-    tokenTotals.cacheWrite;
   const activeAgentCount = agents.filter((agent) => agent.status !== "offline").length;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader>
         <div className="flex min-w-0 items-center gap-2">
-          <BarChart3 className="size-4 text-muted-foreground" />
+          <Activity className="size-4 text-muted-foreground" />
           <h1 className="truncate font-heading text-sm font-semibold">
             {t(($) => $.title)}
           </h1>
@@ -365,38 +288,17 @@ export function OverviewPage() {
 
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-col px-5 py-8 md:px-8 md:py-12">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h2 className="font-heading text-4xl font-semibold leading-none tracking-normal text-foreground md:text-6xl">
-                {t(($) => $.activity.title)}
-              </h2>
-              <p className="mt-3 max-w-2xl text-base text-muted-foreground">
-                {t(($) => $.subtitle)}
-              </p>
-            </div>
-            <div className="text-sm text-muted-foreground md:text-right">
-              <div className="font-medium text-foreground">
-                {usageLoading ? (
-                  <Skeleton className="inline-block h-4 w-40 align-middle" />
-                ) : (
-                  <>
-                    {formatMoney(tokenTotals.cost)}
-                    <span className="mx-1 text-muted-foreground">/</span>
-                    {formatTokens(totalTokens)}
-                    <span className="mx-1 text-muted-foreground">/</span>
-                    {formatDuration(
-                      runtimeTotals.seconds,
-                      t(($) => $.duration.less_than_minute),
-                    )}
-                  </>
-                )}
-              </div>
-              <div>{t(($) => $.window_label, { days: USAGE_DAYS })}</div>
-            </div>
+          <div>
+            <h2 className="font-heading text-4xl font-semibold leading-none tracking-normal text-foreground md:text-6xl">
+              {t(($) => $.activity.title)}
+            </h2>
+            <p className="mt-3 max-w-2xl text-base text-muted-foreground">
+              {t(($) => $.subtitle)}
+            </p>
           </div>
 
           <Tabs defaultValue="activity" className="mt-6 gap-0">
-            <OverviewToolbar
+            <ActivityToolbar
               projects={projects}
               projectFilter={projectFilter}
               onProjectFilterChange={setProjectFilter}
@@ -424,17 +326,6 @@ export function OverviewPage() {
                 t={t}
               />
             </TabsContent>
-
-            <TabsContent value="usage" className="mt-10">
-              <UsageSnapshot
-                rows={agentRows}
-                agentById={agentById}
-                totals={tokenTotals}
-                runtimeTotals={runtimeTotals}
-                loading={usageLoading}
-                t={t}
-              />
-            </TabsContent>
           </Tabs>
         </div>
       </div>
@@ -442,7 +333,7 @@ export function OverviewPage() {
   );
 }
 
-function OverviewToolbar({
+function ActivityToolbar({
   projects,
   projectFilter,
   onProjectFilterChange,
@@ -455,7 +346,7 @@ function OverviewToolbar({
   onProjectFilterChange: (value: string) => void;
   query: string;
   onQueryChange: (value: string) => void;
-  t: OverviewT;
+  t: ActivityT;
 }) {
   return (
     <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center">
@@ -465,9 +356,6 @@ function OverviewToolbar({
         </TabsTrigger>
         <TabsTrigger value="wrapup" className="h-8 rounded-md px-3">
           {t(($) => $.tabs.wrapup)}
-        </TabsTrigger>
-        <TabsTrigger value="usage" className="h-8 rounded-md px-3">
-          {t(($) => $.tabs.usage)}
         </TabsTrigger>
       </TabsList>
 
@@ -519,7 +407,7 @@ function ActivityTimeline({
   loading: boolean;
   timeAgo: (dateStr: string) => string;
   activeAgentCount: number;
-  t: OverviewT;
+  t: ActivityT;
 }) {
   if (loading) return <ListSkeleton />;
   if (groups.length === 0) {
@@ -572,7 +460,7 @@ function ActivityRow({
 }: {
   item: ActivityItem;
   timeAgo: (dateStr: string) => string;
-  t: OverviewT;
+  t: ActivityT;
 }) {
   const Icon = item.icon;
   return (
@@ -618,7 +506,7 @@ function ProjectWrapList({
   loading: boolean;
   timeAgo: (dateStr: string) => string;
   paths: ReturnType<typeof useWorkspacePaths>;
-  t: OverviewT;
+  t: ActivityT;
 }) {
   if (loading) return <ListSkeleton />;
   if (rows.length === 0) {
@@ -666,7 +554,7 @@ function ProjectWrapRowItem({
   row: ProjectWrapRow;
   timeAgo: (dateStr: string) => string;
   paths: ReturnType<typeof useWorkspacePaths>;
-  t: OverviewT;
+  t: ActivityT;
 }) {
   const openCount = row.project
     ? Math.max(0, row.issueCount - row.doneCount)
@@ -721,103 +609,6 @@ function ProjectWrapRowItem({
         )}
       </div>
     </section>
-  );
-}
-
-function UsageSnapshot({
-  rows,
-  agentById,
-  totals,
-  runtimeTotals,
-  loading,
-  t,
-}: {
-  rows: ReturnType<typeof mergeAgentDashboardRows>;
-  agentById: Map<string, Agent>;
-  totals: ReturnType<typeof computeDailyTotals>;
-  runtimeTotals: RuntimeTotals;
-  loading: boolean;
-  t: OverviewT;
-}) {
-  const totalTokens =
-    totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
-  if (loading) return <ListSkeleton />;
-
-  return (
-    <div className="space-y-8">
-      <DayDivider
-        label={t(($) => $.usage.date_label, { days: USAGE_DAYS })}
-        sideText={t(($) => $.usage.agent_count, { count: rows.length })}
-      />
-      <div className="grid gap-4 border-y py-5 md:grid-cols-3">
-        <UsageBigStat label={t(($) => $.usage.cost)} value={formatMoney(totals.cost)} />
-        <UsageBigStat label={t(($) => $.usage.tokens)} value={formatTokens(totalTokens)} />
-        <UsageBigStat
-          label={t(($) => $.usage.run_time)}
-          value={formatDuration(
-            runtimeTotals.seconds,
-            t(($) => $.duration.less_than_minute),
-          )}
-        />
-      </div>
-
-      {rows.length === 0 ? (
-        <EmptyState
-          icon={Bot}
-          title={t(($) => $.usage.empty_title)}
-          body={t(($) => $.usage.empty_body)}
-        />
-      ) : (
-        <div className="divide-y border-y">
-          {rows.slice(0, 8).map((row) => {
-            const agent = agentById.get(row.agentId);
-            return (
-              <div key={row.agentId} className="grid gap-3 py-4 md:grid-cols-[minmax(0,1fr)_120px_120px_120px] md:items-center">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                    <Bot className="size-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-base font-semibold">
-                      {agent?.name ?? t(($) => $.usage.unknown_agent)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {t(($) => $.usage.tasks, { count: row.taskCount })}
-                    </div>
-                  </div>
-                </div>
-                <UsageCell label={t(($) => $.usage.cost)} value={formatMoney(row.cost)} />
-                <UsageCell label={t(($) => $.usage.tokens)} value={formatTokens(row.tokens)} />
-                <UsageCell
-                  label={t(($) => $.usage.run_time)}
-                  value={formatDuration(row.seconds, t(($) => $.duration.less_than_minute))}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UsageBigStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-1 text-3xl font-semibold tabular-nums">{value}</div>
-    </div>
-  );
-}
-
-function UsageCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground md:hidden">
-        {label}
-      </div>
-      <div className="text-base font-semibold tabular-nums md:text-right">{value}</div>
-    </div>
   );
 }
 

@@ -30,6 +30,7 @@ import {
   SquarePen,
   CircleUser,
   FolderKanban,
+  Activity,
   BarChart3,
   X,
   Zap,
@@ -107,13 +108,13 @@ const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 type NavKey =
   | "inbox"
   | "myIssues"
-  | "overview"
   | "issues"
   | "projects"
   | "autopilots"
   | "agents"
   | "squads"
   | "usage"
+  | "activity"
   | "runtimes"
   | "skills"
   | "settings";
@@ -122,13 +123,13 @@ type NavKey =
 type NavLabelKey =
   | "inbox"
   | "my_issues"
-  | "overview"
   | "issues"
   | "projects"
   | "autopilots"
   | "agents"
   | "squads"
   | "usage"
+  | "activity"
   | "runtimes"
   | "skills"
   | "settings";
@@ -139,12 +140,13 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 ];
 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
-  { key: "overview", labelKey: "overview", icon: BarChart3 },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },
+  { key: "usage", labelKey: "usage", icon: BarChart3 },
+  { key: "activity", labelKey: "activity", icon: Activity },
 ];
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
