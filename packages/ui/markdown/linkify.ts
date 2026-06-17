@@ -25,7 +25,7 @@ const FILE_PATH_REGEX = new RegExp(
 // A bare filename token like "plan.md" or "vite.config.ts": a single path
 // segment ending in a known file extension, with no slash, scheme, or port.
 // linkify-it fuzzy-matches these as domains because several of the extensions
-// (md, io, sh, rs, py, …) are also valid TLDs. We use this to stop bare
+// (md, sh, rs, py, …) are also valid TLDs. We use this to stop bare
 // filenames from being auto-linked to dead external sites like https://plan.md.
 const BARE_FILENAME_REGEX = new RegExp(`^[\\w.-]+\\.(?:${FILE_EXTENSIONS})$`, 'i')
 
