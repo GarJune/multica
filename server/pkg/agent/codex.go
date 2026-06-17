@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -56,6 +57,8 @@ const CodexSemanticInactivityMarker = "codex semantic inactivity timeout"
 const CodexFirstTurnNoProgressMarker = "codex app-server no progress timeout"
 
 const codexModelCatalogRefreshTimeoutSignal = "failed to refresh available models: timeout waiting for child process to exit"
+
+var errCodexProcessExited = errors.New("codex process exited")
 
 type codexTimeoutKind int
 
@@ -589,6 +592,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		cfg:                  b.cfg,
 		stdin:                stdin,
 		pending:              make(map[int]*pendingRPC),
+		processDone:          make(chan struct{}),
 		notificationProtocol: "unknown",
 		onMessage: func(msg Message) {
 			logCodexAgentMessage(b.cfg.Logger, msg)
@@ -625,7 +629,11 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			}
 			c.handleLine(line)
 		}
-		c.closeAllPending(fmt.Errorf("codex process exited"))
+		if err := scanner.Err(); err != nil {
+			c.markProcessExited(fmt.Errorf("%w: %v", errCodexProcessExited, err))
+			return
+		}
+		c.markProcessExited(errCodexProcessExited)
 	}()
 
 	// drainAndWait closes stdin so codex shuts down, then joins cmd.Wait().
@@ -915,6 +923,10 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 			}
 			logger.Warn("codex thread/resume returned no thread ID; falling back to thread/start", "prior_thread_id", priorThreadID)
 		} else {
+			if isCodexTransportError(err) {
+				logger.Warn("codex thread/resume failed due to transport error; not falling back to thread/start", "prior_thread_id", priorThreadID, "error", err)
+				return "", false, fmt.Errorf("codex thread/resume failed: %w", err)
+			}
 			logger.Warn("codex thread/resume failed; falling back to thread/start", "prior_thread_id", priorThreadID, "error", err)
 		}
 	}
@@ -1156,6 +1168,8 @@ type codexClient struct {
 	mu                 sync.Mutex
 	nextID             int
 	pending            map[int]*pendingRPC
+	processDone        chan struct{}
+	processErr         error
 	threadID           string
 	turnID             string
 	onMessage          func(Message)
@@ -1202,6 +1216,15 @@ type rpcResult struct {
 
 func (c *codexClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	c.mu.Lock()
+	if c.processErr != nil {
+		err := c.processErr
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.processDone == nil {
+		c.processDone = make(chan struct{})
+	}
+	processDone := c.processDone
 	c.nextID++
 	id := c.nextID
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: method}
@@ -1239,6 +1262,15 @@ func (c *codexClient) request(ctx context.Context, method string, params any) (j
 	select {
 	case res := <-pr.ch:
 		return res.result, res.err
+	case <-processDone:
+		c.mu.Lock()
+		delete(c.pending, id)
+		err := c.processErr
+		c.mu.Unlock()
+		if err == nil {
+			err = errCodexProcessExited
+		}
+		return nil, err
 	case <-ctx.Done():
 		c.mu.Lock()
 		delete(c.pending, id)
@@ -1289,6 +1321,34 @@ func (c *codexClient) closeAllPending(err error) {
 		pr.ch <- rpcResult{err: err}
 		delete(c.pending, id)
 	}
+}
+
+func (c *codexClient) markProcessExited(err error) {
+	if err == nil {
+		err = errCodexProcessExited
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.processErr == nil {
+		c.processErr = err
+		if c.processDone != nil {
+			close(c.processDone)
+		}
+	}
+	for id, pr := range c.pending {
+		pr.ch <- rpcResult{err: err}
+		delete(c.pending, id)
+	}
+}
+
+func isCodexTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errCodexProcessExited) {
+		return true
+	}
+	return strings.HasPrefix(err.Error(), "write ")
 }
 
 func (c *codexClient) handleLine(line string) {

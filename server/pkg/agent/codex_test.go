@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,9 +23,10 @@ func newTestCodexClient(t *testing.T) (*codexClient, *fakeStdin, []Message) {
 	var messages []Message
 
 	c := &codexClient{
-		cfg:     Config{Logger: slog.Default()},
-		stdin:   fs,
-		pending: make(map[int]*pendingRPC),
+		cfg:         Config{Logger: slog.Default()},
+		stdin:       fs,
+		pending:     make(map[int]*pendingRPC),
+		processDone: make(chan struct{}),
 		onMessage: func(msg Message) {
 			mu.Lock()
 			messages = append(messages, msg)
@@ -763,6 +765,21 @@ func TestCodexCloseAllPending(t *testing.T) {
 	}
 }
 
+func TestCodexRequestFailsImmediatelyAfterProcessExit(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	c.markProcessExited(errCodexProcessExited)
+
+	_, err := c.request(context.Background(), "thread/start", map[string]any{})
+	if !errors.Is(err, errCodexProcessExited) {
+		t.Fatalf("request error = %v, want errCodexProcessExited", err)
+	}
+	if lines := fs.Lines(); len(lines) != 0 {
+		t.Fatalf("request should not write after process exit, wrote %d lines", len(lines))
+	}
+}
+
 func TestCodexHandleInvalidJSON(t *testing.T) {
 	t.Parallel()
 
@@ -1077,6 +1094,61 @@ func TestCodexStartOrResumeThreadFallsBackOnResumeError(t *testing.T) {
 	}
 	if resumed {
 		t.Error("expected resumed=false after falling back to thread/start")
+	}
+}
+
+func TestCodexStartOrResumeThreadDoesNotFallBackAfterProcessExit(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	processExitMarked := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			if len(fs.Lines()) >= 1 {
+				c.markProcessExited(errCodexProcessExited)
+				processExitMarked <- nil
+				return
+			}
+			if time.Now().After(deadline) {
+				processExitMarked <- fmt.Errorf("timed out waiting for thread/resume request")
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	threadID, resumed, err := c.startOrResumeThread(
+		ctx,
+		ExecOptions{Cwd: "/work", ResumeSessionID: "thr_stale"},
+		slog.Default(),
+	)
+	if markErr := <-processExitMarked; markErr != nil {
+		t.Fatal(markErr)
+	}
+	if !errors.Is(err, errCodexProcessExited) {
+		t.Fatalf("startOrResumeThread error = %v, want errCodexProcessExited", err)
+	}
+	if threadID != "" {
+		t.Fatalf("threadID = %q, want empty", threadID)
+	}
+	if resumed {
+		t.Fatal("resumed should be false on process exit")
+	}
+	lines := fs.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("expected only thread/resume request, got %d lines: %v", len(lines), lines)
+	}
+	var req struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &req); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if req.Method != "thread/resume" {
+		t.Fatalf("request method = %q, want thread/resume", req.Method)
 	}
 }
 
