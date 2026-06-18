@@ -271,7 +271,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         {
           version: "0.3.25",
           date: "2026-06-18",
-          title: "ローカルスキル、オートパイロット購読者、より滑らかなチャット",
+          title: "スキル、オートパイロット、チャットでのエージェント作業をより信頼性高く",
           changes: [],
           features: [
             "開発者のマシンにあるローカルスキルライブラリを自動で見つけ、エージェント実行で使いやすくなりました。",

@@ -270,7 +270,7 @@ export function createKoDict(allowSignup: boolean): LandingDict {
         {
           version: "0.3.25",
           date: "2026-06-18",
-          title: "로컬 스킬, 오토파일럿 구독자, 더 매끄러운 채팅",
+          title: "스킬, 오토파일럿, 채팅 전반의 에이전트 작업 안정성 강화",
           changes: [],
           features: [
             "개발자 기기의 로컬 스킬 라이브러리를 자동으로 찾아 에이전트 실행에서 더 쉽게 사용할 수 있습니다.",

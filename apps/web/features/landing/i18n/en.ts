@@ -295,7 +295,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.25",
         date: "2026-06-18",
-        title: "Local Skills, Autopilot Subscribers, and Smoother Chat",
+        title: "More Reliable Agent Work Across Skills, Autopilots, and Chat",
         changes: [],
         features: [
           "Local skill libraries on a developer machine can now be picked up automatically for agent runs",

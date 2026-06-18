@@ -295,7 +295,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.3.25",
         date: "2026-06-18",
-        title: "本地技能、自动任务订阅人和更顺滑的聊天",
+        title: "让技能、自动任务和聊天中的智能体工作更可靠",
         changes: [],
         features: [
           "开发者机器上的本地技能库现在可以被自动识别，智能体运行时更容易复用团队能力",
