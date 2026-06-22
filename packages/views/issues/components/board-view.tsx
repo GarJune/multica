@@ -33,6 +33,7 @@ import {
   buildColumns,
   computePosition,
   findColumn,
+  insertIdByPosition,
   issueMatchesGroup,
   getMoveUpdates,
 } from "../utils/drag-utils";
@@ -359,6 +360,23 @@ export function BoardView({
           resetColumns();
           return;
         }
+        // Optimistically move the card into the target column *now*. Without
+        // this, the sortBy != "position" path never touches local columns on
+        // drop, so onDragOver having been a no-op leaves the card in its origin
+        // column for the whole request — it only jumps across when the mutation
+        // settles. That is the "snaps back to origin, then moves" glitch.
+        // Placement mirrors the cache (insertByPosition) so the settle rebuild
+        // from TanStack Query is a visual no-op.
+        setColumns((prev) => {
+          const fromIds = (prev[activeCol] ?? []).filter((cid) => cid !== activeId);
+          const toIds = insertIdByPosition(
+            prev[overCol] ?? [],
+            activeId,
+            currentIssue.position,
+            map,
+          );
+          return { ...prev, [activeCol]: fromIds, [overCol]: toIds };
+        });
         isSettlingRef.current = true;
         onMoveIssue(activeId, getMoveUpdates(finalGroup, currentIssue.position), () => {
           isSettlingRef.current = false;
@@ -382,6 +400,12 @@ export function BoardView({
       isSettlingRef.current = true;
       onMoveIssue(activeId, getMoveUpdates(finalGroup, newPosition), () => {
         isSettlingRef.current = false;
+        // Reconcile local columns from the cache once settled: a no-op on
+        // success (onSuccess already patched the moved card in place), and the
+        // revert path on error (onError restored the snapshot). Without this
+        // bump a failed move would leave the card stranded at the drop target,
+        // since onSettled no longer refetches the list.
+        setSettleVersion((v) => v + 1);
       });
     },
     [groupedIssues, groups, grouping, onMoveIssue, groupIds, groupMap, sortBy],

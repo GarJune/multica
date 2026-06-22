@@ -280,9 +280,33 @@ export function useUpdateIssue() {
         );
       }
     },
+    onSuccess: (serverIssue) => {
+      // Reconcile with the authoritative server entity by patching the one card
+      // in place — NOT by invalidating + refetching the list. The list refetch
+      // is what made a successful move flicker: the optimistic card was already
+      // in the right place, then the refetch replaced the whole column and the
+      // card re-landed. updateIssue returns the full issue and a position update
+      // touches only that row, so a surgical patch is the authoritative
+      // reconcile and is a visual no-op when the optimistic value matched.
+      const lists = qc.getQueriesData<ListIssuesCache>({
+        queryKey: issueKeys.list(wsId),
+      });
+      for (const [key, cached] of lists) {
+        if (cached)
+          qc.setQueryData<ListIssuesCache>(
+            key,
+            patchIssueInBuckets(cached, serverIssue.id, serverIssue),
+          );
+      }
+      qc.setQueryData<Issue>(issueKeys.detail(wsId, serverIssue.id), (old) =>
+        old ? { ...old, ...serverIssue } : old,
+      );
+    },
     onSettled: (_data, _err, vars, ctx) => {
-      qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, vars.id) });
-      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
+      // The issue's own list + detail caches are reconciled surgically in
+      // onSuccess / onError, so they are deliberately NOT invalidated here — a
+      // full-list refetch on settle is what made drags flicker. Only aggregate
+      // caches that cannot be patched from a single issue are refreshed below.
       qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
       qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
       qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
