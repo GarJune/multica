@@ -305,16 +305,11 @@ WHERE issue_id = $1 AND workspace_id = $2;
 -- triggering thread first (see BuildNewCommentsHint), but the count is
 -- issue-wide so it knows the full catch-up volume. Feeds the daemon claim
 -- response without shipping comment bodies.
---
--- type='handoff' is a display-only timeline record, not conversation — exclude
--- it so a handoff note never inflates the agent's "new comments" catch-up count
--- (MUL-3375 §12, "不计入对话/评论触发").
 SELECT count(*) FROM comment
 WHERE issue_id = @issue_id
   AND workspace_id = @workspace_id
   AND created_at > @since
   AND id <> @anchor_id
-  AND type <> 'handoff'
   AND NOT (author_type = 'agent' AND author_id = @author_id);
 
 -- name: GetComment :one

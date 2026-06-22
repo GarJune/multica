@@ -472,8 +472,5 @@
     "row_backlog_hint": "智能体保持暂停",
     "row_todo_label": "Todo",
     "row_todo_hint": "启动智能体"
-  },
-  "handoff_card": {
-    "label": "交接了这个 issue"
   }
 }

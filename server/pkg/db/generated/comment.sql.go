@@ -122,7 +122,6 @@ WHERE issue_id = $1
   AND workspace_id = $2
   AND created_at > $3
   AND id <> $4
-  AND type <> 'handoff'
   AND NOT (author_type = 'agent' AND author_id = $5)
 `
 
@@ -142,10 +141,6 @@ type CountNewCommentsSinceParams struct {
 // triggering thread first (see BuildNewCommentsHint), but the count is
 // issue-wide so it knows the full catch-up volume. Feeds the daemon claim
 // response without shipping comment bodies.
-//
-// type='handoff' is a display-only timeline record, not conversation — exclude
-// it so a handoff note never inflates the agent's "new comments" catch-up count
-// (MUL-3375 §12, "不计入对话/评论触发").
 func (q *Queries) CountNewCommentsSince(ctx context.Context, arg CountNewCommentsSinceParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countNewCommentsSince,
 		arg.IssueID,

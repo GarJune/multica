@@ -1,8 +1,4 @@
-// `handoff` is a display-only timeline record left when an issue is handed off
-// to an agent/squad with a handoff note (MUL-3375). It never triggers a run and
-// is excluded from conversation/comment counting; the UI renders it as a
-// handoff card, not a normal comment.
-export type CommentType = "comment" | "status_change" | "progress_update" | "system" | "handoff";
+export type CommentType = "comment" | "status_change" | "progress_update" | "system";
 
 // `system` is used by platform-generated rows (e.g. the parent-issue
 // child-done notification, MUL-2538). System rows carry a zero UUID for

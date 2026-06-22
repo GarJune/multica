@@ -467,8 +467,5 @@
     "row_backlog_hint": "エージェントを一時停止のままにします",
     "row_todo_label": "未着手",
     "row_todo_hint": "エージェントを開始します"
-  },
-  "handoff_card": {
-    "label": "このイシューを引き継ぎました"
   }
 }

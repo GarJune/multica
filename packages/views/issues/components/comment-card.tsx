@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeftRight, CheckCircle2, ChevronRight, ListChevronsDownUp, Copy, Loader2, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronRight, ListChevronsDownUp, Copy, Loader2, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
@@ -681,37 +681,6 @@ function CommentRow({
 // CommentCard — One Card per thread (parent + all replies flat inside)
 // ---------------------------------------------------------------------------
 
-// HandoffCard renders a display-only handoff record (comment_type === "handoff",
-// MUL-3375 §6.2). It is NOT a conversation comment: no reply, edit, delete,
-// reactions, or resolve — just who handed off, when, and the note. Rendering it
-// distinctly keeps it from reading as a normal message.
-function HandoffCard({ entry }: { entry: TimelineEntry }) {
-  const { t } = useT("issues");
-  const timeAgo = useTimeAgo();
-  const { getActorName } = useActorName();
-  const note = entry.content ?? "";
-
-  return (
-    <div className="px-4 py-2">
-      <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <ArrowLeftRight className="size-3.5 shrink-0" />
-          <span className="font-medium text-foreground">
-            {getActorName(entry.actor_type, entry.actor_id)}
-          </span>
-          <span>{t(($) => $.handoff_card.label)}</span>
-          <span className="ml-auto shrink-0 text-xs">{timeAgo(entry.created_at)}</span>
-        </div>
-        {note ? (
-          <p className="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm text-foreground">
-            {note}
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 function CommentCardImpl({
   issueId,
   entry,
@@ -748,11 +717,6 @@ function CommentCardImpl({
   const replyCount = allNestedReplies.length;
   const contentPreview = (entry.content ?? "").replace(/\n/g, " ").slice(0, 80);
   const reactions = entry.reactions ?? [];
-
-  // Display-only handoff record — render a distinct card, never the thread UI.
-  if (entry.comment_type === "handoff") {
-    return <HandoffCard entry={entry} />;
-  }
 
   const isHighlighted = highlightedCommentId === entry.id;
 
