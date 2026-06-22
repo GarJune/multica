@@ -343,9 +343,8 @@ func TestChatOutputDoesNotRequireIssueComment(t *testing.T) {
 	out := buildMetaSkillContent("claude", TaskContextForEnv{ChatSessionID: "chat-1"})
 
 	for _, want := range []string{
-		"This is a chat task",
-		"delivered directly to the chat window",
-		"unless the user explicitly asks you to write a comment to a specific issue",
+		"This is a chat session",
+		"Your reply is delivered directly to the chat window the user is reading",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat brief missing chat output guidance %q\n---\n%s", want, out)
@@ -355,6 +354,8 @@ func TestChatOutputDoesNotRequireIssueComment(t *testing.T) {
 	for _, banned := range []string{
 		"Final results MUST be delivered via `multica issue comment add`",
 		"The user does NOT see your terminal output",
+		"do not call `multica issue comment add`",
+		"unless the user explicitly asks",
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("chat brief must not inherit issue-comment output warning %q\n---\n%s", banned, out)
