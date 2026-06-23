@@ -57,6 +57,7 @@ import {
 } from "@multica/core/api";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { PillButton } from "../common/pill-button";
+import { ActorAvatar } from "../common/actor-avatar";
 import { IssuePickerModal } from "./issue-picker-modal";
 import { useT } from "../i18n";
 
@@ -80,9 +81,15 @@ function toDraftAttachment(attachment: Attachment): Attachment {
 // ---------------------------------------------------------------------------
 
 // CreateRunHint is the create modal's passive pre-trigger label (MUL-3375 §4):
-// gray text that says whether saving will start a run, driven by the unified
-// backend predicate (preview, isCreate) — never a frontend guess. No dialog,
-// no blocking: creating is unaffected.
+// whether saving will start a run, driven by the unified backend predicate
+// (preview, isCreate) — never a frontend guess. No dialog, no blocking.
+//
+// Visually it borrows the comment header's avatar+text line, minus the
+// interactivity — purely a caption, never a link/hover-card. It renders its own
+// reveal band (a grid 0fr→1fr collapse) so it sits on a dedicated row above the
+// property toolbar without reflowing anything: collapsed it is 0px (the flex-1
+// editor absorbs the delta), and it expands only once the predicate resolves,
+// animating straight to the correct copy.
 function CreateRunHint({
   assigneeType,
   assigneeId,
@@ -103,16 +110,64 @@ function CreateRunHint({
     enabled: isAgentLike && !!assigneeId,
   });
 
-  if (!isAgentLike || !assigneeId) return null;
+  // Reveal only after the predicate resolves so the band animates to the final
+  // copy instead of flashing "parked" before the run preview lands.
+  const ready = isAgentLike && !!assigneeId && !preview.isLoading;
+  const willStart = preview.totalCount > 0;
+  const isSquad = assigneeType === "squad";
+  const triggerAgentId = preview.triggers[0]?.agent_id ?? assigneeId;
 
-  const text =
-    preview.totalCount > 0
-      ? t(($) => $.run_confirm.create_will_start, {
-          name: getActorName("agent", preview.triggers[0]?.agent_id ?? assigneeId),
-        })
-      : t(($) => $.run_confirm.create_parked);
+  // Avatar + copy mirror the flow. A squad doesn't "work" — its leader
+  // evaluates and delegates — so the squad path keeps the squad as the subject
+  // (avatar + name) and uses the leader-delegates copy. A single agent picks
+  // the issue up directly; a parked issue shows whoever it was assigned to.
+  let avatarType: string;
+  let avatarId: string | undefined;
+  let text: string;
+  if (!willStart) {
+    avatarType = assigneeType ?? "agent";
+    avatarId = assigneeId;
+    text = t(($) => $.run_confirm.create_parked);
+  } else if (isSquad) {
+    avatarType = "squad";
+    avatarId = assigneeId;
+    text = t(($) => $.run_confirm.create_will_start_squad, {
+      name: getActorName("squad", assigneeId ?? ""),
+    });
+  } else {
+    avatarType = "agent";
+    avatarId = triggerAgentId;
+    text = t(($) => $.run_confirm.create_will_start, {
+      name: getActorName("agent", triggerAgentId ?? assigneeId ?? ""),
+    });
+  }
 
-  return <span className="truncate text-xs text-muted-foreground">{text}</span>;
+  return (
+    <div
+      className={cn(
+        "grid shrink-0 transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+        ready ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+      )}
+      aria-hidden={!ready}
+    >
+      <div className="overflow-hidden">
+        <div
+          aria-live="polite"
+          className="flex items-center gap-1.5 px-4 pb-1 pt-0.5 text-[0.6875rem] text-muted-foreground"
+        >
+          {avatarId && (
+            <ActorAvatar
+              actorType={avatarType}
+              actorId={avatarId}
+              size={16}
+              profileLink={false}
+            />
+          )}
+          <span className="truncate">{text}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function ManualCreatePanel({
@@ -542,6 +597,10 @@ export function ManualCreatePanel({
               {descDragOver && <FileDropOverlay />}
             </div>
 
+            {/* Pre-trigger preview — a passive caption above the toolbar; reveals
+                when an agent assignee will pick the issue up. */}
+            <CreateRunHint assigneeType={assigneeType} assigneeId={assigneeId} status={status} />
+
             {/* Property toolbar */}
             <div className="flex items-center gap-1.5 px-4 py-2 shrink-0 flex-wrap">
               {/* Status */}
@@ -750,7 +809,6 @@ export function ManualCreatePanel({
                 <FileUploadButton
                   onSelect={(file) => descEditorRef.current?.uploadFile(file)}
                 />
-                <CreateRunHint assigneeType={assigneeType} assigneeId={assigneeId} status={status} />
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button

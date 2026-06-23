@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -19,6 +19,24 @@ import { useIssueTriggerPreview } from "../issues/hooks/use-issue-trigger-previe
 import { useT } from "../i18n";
 
 const MAX_HANDOFF_NOTE = 2000;
+
+// i18next inlines {{name}} into the sentence, but the actor's position varies by
+// language ("{{name}} 会…" vs "Once assigned, {{name}} will…" vs "{{name}}'s
+// leader…"). Fence the name with a sentinel so we can bold just that span at
+// render time without splitting copy into per-language prefix/suffix keys.
+const NAME_FENCE = "\u0000";
+
+function boldName(text: string): ReactNode {
+  const parts = text.split(NAME_FENCE);
+  if (parts.length !== 3) return text;
+  return (
+    <>
+      {parts[0]}
+      <span className="font-semibold text-foreground">{parts[1]}</span>
+      {parts[2]}
+    </>
+  );
+}
 
 interface RunConfirmData {
   issueIds?: string[];
@@ -100,19 +118,31 @@ export function RunConfirmModal({
     }
   };
 
-  const headline = (() => {
+  // A squad doesn't "work" — its leader evaluates the issue and delegates. The
+  // copy reflects that (see issues.json squad_leader_*). Only knowable in assign
+  // mode, where assigneeType is carried; status-mode triggers expose only the
+  // resolved leader agent, so they stay on the generic copy.
+  const isSquad = mode === "assign" && d.assigneeType === "squad";
+
+  const headline: ReactNode = (() => {
     if (!willStart) {
       return mode === "assign"
         ? t(($) => $.run_confirm.nothing_assign)
         : t(($) => $.run_confirm.nothing_status);
     }
-    // Single trigger → name the agent ("将启动 @X"), resolved from the preview's
+    // Single trigger → name the assignee (bolded), resolved from the preview's
     // runnable agent (squad leader for squads). Batch → count.
     if (preview.triggers.length === 1) {
+      if (isSquad) {
+        const name = d.assigneeName ?? getActorName("squad", d.assigneeId ?? "");
+        return boldName(t(($) => $.run_confirm.will_start_named_squad, { name: `${NAME_FENCE}${name}${NAME_FENCE}` }));
+      }
       const name = d.assigneeName ?? getActorName("agent", preview.triggers[0]!.agent_id);
-      return t(($) => $.run_confirm.will_start_named, { name });
+      return boldName(t(($) => $.run_confirm.will_start_named, { name: `${NAME_FENCE}${name}${NAME_FENCE}` }));
     }
-    return t(($) => $.run_confirm.will_start, { count: preview.totalCount });
+    return isSquad
+      ? t(($) => $.run_confirm.will_start_squad, { count: preview.totalCount })
+      : t(($) => $.run_confirm.will_start, { count: preview.totalCount });
   })();
 
   return (
