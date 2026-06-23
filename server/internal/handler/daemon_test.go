@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -328,6 +329,96 @@ func TestClaimTaskByRuntime_DoesNotReclaimDifferentRuntimeTask(t *testing.T) {
 	}
 	if runtimeID != owningRuntimeID {
 		t.Fatalf("task runtime_id = %s, want %s", runtimeID, owningRuntimeID)
+	}
+}
+
+func TestClaimTaskByRuntime_SkillBundleRefsAndResolve(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Skill refs runtime")
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Skill refs agent")
+
+	var skillID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
+		VALUES ($1, 'deploy-skill-ref-test', 'Deploy safely', 'main skill content', '{}'::jsonb, $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&skillID); err != nil {
+		t.Fatalf("setup: create skill: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_skill WHERE skill_id = $1`, skillID)
+		testPool.Exec(ctx, `DELETE FROM skill_file WHERE skill_id = $1`, skillID)
+		testPool.Exec(ctx, `DELETE FROM skill WHERE id = $1`, skillID)
+	})
+	if _, err := testPool.Exec(ctx, `INSERT INTO skill_file (skill_id, path, content) VALUES ($1, 'rules.md', 'rules content')`, skillID); err != nil {
+		t.Fatalf("setup: create skill file: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`, agentID, skillID); err != nil {
+		t.Fatalf("setup: bind skill: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'queued', 0)
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("setup: create task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "skill-refs-daemon")
+	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilitySkillBundlesV1)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var claimResp struct {
+		Task *AgentTaskResponse `json:"task"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &claimResp); err != nil {
+		t.Fatalf("decode claim: %v", err)
+	}
+	if claimResp.Task == nil || claimResp.Task.Agent == nil {
+		t.Fatalf("missing task agent in response: %s", w.Body.String())
+	}
+	if len(claimResp.Task.Agent.Skills) != 0 {
+		t.Fatalf("slim claim returned full skills: %+v", claimResp.Task.Agent.Skills)
+	}
+	var ref service.AgentSkillRefData
+	for _, candidate := range claimResp.Task.Agent.SkillRefs {
+		if candidate.ID == skillID {
+			ref = candidate
+			break
+		}
+	}
+	if ref.ID == "" || ref.Hash == "" || ref.FileCount != 1 || len(ref.Files) != 1 || ref.Files[0].SHA256 == "" {
+		t.Fatalf("workspace skill ref missing manifest: %+v", ref)
+	}
+
+	resolveBody := resolveSkillBundlesRequest{Skills: []resolveSkillBundleRef{{ID: ref.ID, Source: ref.Source, Hash: ref.Hash}}}
+	w = httptest.NewRecorder()
+	req = newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/"+taskID+"/skill-bundles/resolve", resolveBody, testWorkspaceID, "skill-refs-daemon")
+	req = withURLParams(req, "runtimeId", runtimeID, "taskId", taskID)
+	testHandler.ResolveTaskSkillBundles(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ResolveTaskSkillBundles: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resolveResp struct {
+		Bundles []service.AgentSkillData `json:"bundles"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resolveResp); err != nil {
+		t.Fatalf("decode resolve: %v", err)
+	}
+	if len(resolveResp.Bundles) != 1 || resolveResp.Bundles[0].Content != "main skill content" || len(resolveResp.Bundles[0].Files) != 1 || resolveResp.Bundles[0].Files[0].Content != "rules content" {
+		t.Fatalf("unexpected resolved bundles: %+v", resolveResp.Bundles)
 	}
 }
 

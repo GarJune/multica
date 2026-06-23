@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/skillbundle"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
@@ -141,10 +142,11 @@ type repoCacheBackend interface {
 
 // Daemon is the local agent runtime that polls for and executes tasks.
 type Daemon struct {
-	cfg       Config
-	client    *Client
-	repoCache repoCacheBackend
-	logger    *slog.Logger
+	cfg        Config
+	client     *Client
+	repoCache  repoCacheBackend
+	skillCache *SkillBundleCache
+	logger     *slog.Logger
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -230,6 +232,7 @@ type profileLaunchSpec struct {
 // New creates a new Daemon instance.
 func New(cfg Config, logger *slog.Logger) *Daemon {
 	cacheRoot := filepath.Join(cfg.WorkspacesRoot, ".repos")
+	skillCacheRoot := filepath.Join(cfg.WorkspacesRoot, ".skill-cache", "v1")
 	client := NewClient(cfg.ServerBaseURL)
 	// Tag every daemon HTTP request with the daemon's CLI version so the
 	// server can split logs/metrics by client version (parallel to the CLI).
@@ -238,6 +241,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cfg:                       cfg,
 		client:                    client,
 		repoCache:                 repocache.New(cacheRoot, logger),
+		skillCache:                NewSkillBundleCache(skillCacheRoot),
 		logger:                    logger,
 		workspaces:                make(map[string]*workspaceState),
 		runtimeIndex:              make(map[string]Runtime),
@@ -3116,6 +3120,92 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 	return reused
 }
 
+func (d *Daemon) ensureTaskSkillBundles(ctx context.Context, task *Task) error {
+	if task == nil || task.Agent == nil || len(task.Agent.SkillRefs) == 0 {
+		return nil
+	}
+	resolved := make(map[string]SkillData, len(task.Agent.SkillRefs))
+	misses := make([]SkillRefData, 0)
+	for _, ref := range task.Agent.SkillRefs {
+		ref := ref
+		var bundle SkillData
+		if err := d.skillCache.WithRefLock(task.WorkspaceID, ref, func() error {
+			if cached, ok := d.skillCache.Load(task.WorkspaceID, ref); ok {
+				bundle = cached
+				return nil
+			}
+			misses = append(misses, ref)
+			return nil
+		}); err != nil {
+			return fmt.Errorf("load skill bundle cache: %w", err)
+		}
+		if bundle.ID != "" {
+			resolved[skillRefKey(ref.Source, ref.ID)] = bundle
+		}
+	}
+
+	if len(misses) > 0 {
+		bundles, err := d.client.ResolveSkillBundles(ctx, task.RuntimeID, task.ID, misses)
+		if err != nil {
+			return fmt.Errorf("resolve skill bundles: %w", err)
+		}
+		for _, bundle := range bundles {
+			ref := skillRefFromBundle(bundle)
+			if !validateSkillBundle(ref, bundle) {
+				return fmt.Errorf("resolve skill bundle returned invalid bundle: skill_id=%s source=%s hash=%s", bundle.ID, bundle.Source, bundle.Hash)
+			}
+			if err := d.skillCache.WithRefLock(task.WorkspaceID, ref, func() error {
+				return d.skillCache.Store(task.WorkspaceID, bundle)
+			}); err != nil {
+				return fmt.Errorf("store skill bundle cache: %w", err)
+			}
+			resolved[skillRefKey(bundle.Source, bundle.ID)] = bundle
+		}
+	}
+
+	skills := make([]SkillData, 0, len(task.Agent.SkillRefs))
+	for _, ref := range task.Agent.SkillRefs {
+		bundle, ok := resolved[skillRefKey(ref.Source, ref.ID)]
+		if !ok {
+			return fmt.Errorf("skill bundle missing after resolve: skill_id=%s source=%s hash=%s", ref.ID, ref.Source, ref.Hash)
+		}
+		skills = append(skills, bundle)
+	}
+	task.Agent.Skills = skills
+	return nil
+}
+
+func skillRefKey(source, id string) string {
+	return source + "\x00" + id
+}
+
+func skillRefFromBundle(bundle SkillData) SkillRefData {
+	files := make([]skillbundle.File, 0, len(bundle.Files))
+	for _, file := range bundle.Files {
+		files = append(files, skillbundle.File{Path: file.Path, Content: file.Content})
+	}
+	manifest := skillbundle.BuildManifest(skillbundle.Skill{
+		ID:          bundle.ID,
+		Source:      bundle.Source,
+		Name:        bundle.Name,
+		Description: bundle.Description,
+		Content:     bundle.Content,
+		Files:       files,
+	})
+	fileRefs := make([]SkillFileRefData, 0, len(manifest.Files))
+	for _, file := range manifest.Files {
+		fileRefs = append(fileRefs, SkillFileRefData{Path: file.Path, SHA256: file.SHA256, SizeBytes: file.SizeBytes})
+	}
+	return SkillRefData{
+		ID:        bundle.ID,
+		Source:    bundle.Source,
+		Hash:      manifest.Hash,
+		SizeBytes: manifest.SizeBytes,
+		FileCount: manifest.FileCount,
+		Files:     fileRefs,
+	}
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
@@ -3154,6 +3244,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if !ok {
 		return TaskResult{}, fmt.Errorf("no agent configured for provider %q", provider)
+	}
+
+	if err := d.ensureTaskSkillBundles(ctx, &task); err != nil {
+		return TaskResult{}, err
 	}
 
 	agentName := "agent"

@@ -1213,6 +1213,15 @@ func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, cl
 	)
 }
 
+func requestHasDaemonCapability(r *http.Request, capability string) bool {
+	for _, part := range strings.Split(r.Header.Get("X-Client-Capabilities"), ",") {
+		if strings.TrimSpace(part) == capability {
+			return true
+		}
+	}
+	return false
+}
+
 // ClaimTaskByRuntime atomically claims the next queued task for a runtime.
 // The response includes the agent's name and skills, fetched fresh from the DB.
 func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
@@ -1272,14 +1281,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp := taskToResponse(*task, runtimeWorkspaceID)
 	if agent, err := h.Queries.GetAgent(r.Context(), task.AgentID); err == nil {
-		// Workspace-bound skills first, then platform built-in skills. Built-in
-		// names carry a "multica-" prefix so their on-disk slugs never collide
-		// with a user-authored workspace skill (see writeSkillFiles).
-		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
-		agentSkillCount = len(skills)
-		builtinSkills := h.TaskService.BuiltinSkills()
-		builtinSkillCount = len(builtinSkills)
-		skills = append(skills, builtinSkills...)
+		useSkillRefs := requestHasDaemonCapability(r, protocol.DaemonCapabilitySkillBundlesV1)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
 			if err := json.Unmarshal(agent.CustomEnv, &customEnv); err != nil {
@@ -1308,13 +1310,24 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			ID:            uuidToString(agent.ID),
 			Name:          agent.Name,
 			Instructions:  agent.Instructions,
-			Skills:        skills,
 			CustomEnv:     customEnv,
 			CustomArgs:    customArgs,
 			McpConfig:     mcpConfig,
 			Model:         agent.Model.String,
 			ThinkingLevel: agent.ThinkingLevel.String,
 			RuntimeConfig: runtimeConfig,
+		}
+		if useSkillRefs {
+			_, skillRefs := h.TaskService.LoadAgentSkillBundles(r.Context(), task.AgentID)
+			agentSkillCount = len(skillRefs)
+			resp.Agent.SkillRefs = skillRefs
+		} else {
+			skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
+			agentSkillCount = len(skills)
+			builtinSkills := h.TaskService.BuiltinSkills()
+			builtinSkillCount = len(builtinSkills)
+			skills = append(skills, builtinSkills...)
+			resp.Agent.Skills = skills
 		}
 	}
 
@@ -1883,8 +1896,71 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if skillPayload, err := json.Marshal(resp.Agent.Skills); err == nil {
 			skillPayloadBytes = len(skillPayload)
 		}
+	} else if resp.Agent != nil && len(resp.Agent.SkillRefs) > 0 {
+		if skillPayload, err := json.Marshal(resp.Agent.SkillRefs); err == nil {
+			skillPayloadBytes = len(skillPayload)
+		}
 	}
 	payloadBytes, _ = writeMeasuredJSON(w, http.StatusOK, map[string]any{"task": resp})
+}
+
+type resolveSkillBundlesRequest struct {
+	Skills []resolveSkillBundleRef `json:"skills"`
+}
+
+type resolveSkillBundleRef struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Hash   string `json:"hash"`
+}
+
+// ResolveTaskSkillBundles returns full skill content for refs from a slim
+// claim. The daemon calls this after claim and before execenv.Prepare so
+// runtimes still see complete local skill files at startup.
+func (h *Handler) ResolveTaskSkillBundles(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	taskID := chi.URLParam(r, "taskId")
+
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	task, taskWorkspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
+		return
+	}
+	if taskWorkspaceID != uuidToString(runtime.WorkspaceID) || uuidToString(task.RuntimeID) != runtimeID {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	var req resolveSkillBundlesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Skills) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"bundles": []service.AgentSkillData{}})
+		return
+	}
+
+	bundles, _ := h.TaskService.LoadAgentSkillBundles(r.Context(), task.AgentID)
+	allowed := make(map[string]service.AgentSkillData, len(bundles))
+	for _, bundle := range bundles {
+		allowed[bundle.Source+"\x00"+bundle.ID] = bundle
+	}
+
+	resolved := make([]service.AgentSkillData, 0, len(req.Skills))
+	for _, ref := range req.Skills {
+		bundle, ok := allowed[ref.Source+"\x00"+ref.ID]
+		if !ok {
+			writeError(w, http.StatusNotFound, "skill bundle not found")
+			return
+		}
+		resolved = append(resolved, bundle)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"bundles": resolved})
 }
 
 // trailingUserMessages returns the run of user messages after the last
