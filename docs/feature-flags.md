@@ -76,7 +76,9 @@ var DaemonBoundFlags = []string{
 ```
 
 On each HTTP or WebSocket heartbeat, the server evaluates every registered key
-with an `EvalContext` containing `workspace_id`, `runtime_id`, and `daemon_id`.
+as a daemon/process-level decision. The snapshot EvalContext exposes
+`daemon_id` only; workspace/runtime/task/user scoped rollout is intentionally
+not part of this channel because the daemon stores one process-global snapshot.
 The heartbeat ack carries a full snapshot:
 
 ```json
@@ -105,8 +107,9 @@ Old daemons talking to new servers ignore the unknown JSON field.
 
 To add another daemon-bound process-level flag, add its key to the registry and
 use the existing daemon feature flag service at the toggle point. Do not add
-task payload fields or task-scoped readers for daemon-bound flags unless a
-separate design explicitly introduces task-scoped daemon flag evaluation.
+workspace percent rollout, task payload fields, or task-scoped readers for
+daemon-bound flags unless a separate design explicitly introduces scoped daemon
+flag evaluation.
 
 ### YAML schema
 

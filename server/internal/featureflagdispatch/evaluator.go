@@ -3,7 +3,6 @@ package featureflagdispatch
 import (
 	"context"
 
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -37,12 +36,7 @@ func (e *Evaluator) EvaluateForRuntime(ctx context.Context, rt db.AgentRuntime) 
 		version = defaultSnapshotVersion
 	}
 	flags := make(map[string]string, len(DaemonBoundFlags))
-	evalCtx := featureflag.EvalContext{
-		WorkspaceID: util.UUIDToString(rt.WorkspaceID),
-		Attributes: map[string]string{
-			"runtime_id": util.UUIDToString(rt.ID),
-		},
-	}
+	evalCtx := featureflag.EvalContext{Attributes: map[string]string{}}
 	if rt.DaemonID.Valid {
 		evalCtx.Attributes["daemon_id"] = rt.DaemonID.String
 	}

@@ -2,7 +2,6 @@ package featureflagdispatch
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -33,7 +32,7 @@ func TestEvaluateForRuntimeWritesDaemonBoundSnapshot(t *testing.T) {
 	}
 }
 
-func TestEvaluateForRuntimeIncludesRuntimeContext(t *testing.T) {
+func TestEvaluateForRuntimeIncludesDaemonContext(t *testing.T) {
 	t.Parallel()
 
 	provider := featureflag.NewStaticProvider()
@@ -50,29 +49,41 @@ func TestEvaluateForRuntimeIncludesRuntimeContext(t *testing.T) {
 	}
 }
 
-func TestEvaluateForRuntimeWorkspacePercentRollout(t *testing.T) {
+func TestEvaluateForRuntimeIsDaemonProcessScoped(t *testing.T) {
 	t.Parallel()
 
 	provider := featureflag.NewStaticProvider()
 	provider.Set(RuntimeBriefSlimFlag, featureflag.Rule{
 		Default: false,
-		Percent: &featureflag.PercentRollout{
-			Percent: 25,
-			By:      "workspace_id",
-		},
+		Allow:   []string{"daemon-a"},
+		AllowBy: "daemon_id",
 	})
 	evaluator := NewEvaluator(featureflag.NewService(provider))
 
-	var enabled int
-	for i := 0; i < 1000; i++ {
-		workspaceID := fmt.Sprintf("00000000-0000-0000-0000-%012x", i)
-		snapshot := evaluator.EvaluateForRuntime(context.Background(), testRuntime(workspaceID, "daemon-a"))
-		if snapshot.Flags[RuntimeBriefSlimFlag] == "on" {
-			enabled++
-		}
+	snapshotA := evaluator.EvaluateForRuntime(context.Background(), testRuntime("00000000-0000-0000-0000-0000000000aa", "daemon-a"))
+	snapshotB := evaluator.EvaluateForRuntime(context.Background(), testRuntime("00000000-0000-0000-0000-0000000000bb", "daemon-a"))
+	if got := snapshotA.Flags[RuntimeBriefSlimFlag]; got != "on" {
+		t.Fatalf("workspace A %s = %q, want on", RuntimeBriefSlimFlag, got)
 	}
-	if enabled < 200 || enabled > 300 {
-		t.Fatalf("25%% workspace rollout enabled %d/1000 workspaces, want roughly 250", enabled)
+	if got := snapshotB.Flags[RuntimeBriefSlimFlag]; got != "on" {
+		t.Fatalf("workspace B %s = %q, want on", RuntimeBriefSlimFlag, got)
+	}
+}
+
+func TestEvaluateForRuntimeDoesNotUseWorkspaceContext(t *testing.T) {
+	t.Parallel()
+
+	provider := featureflag.NewStaticProvider()
+	provider.Set(RuntimeBriefSlimFlag, featureflag.Rule{
+		Default: false,
+		Allow:   []string{"00000000-0000-0000-0000-0000000000aa"},
+		AllowBy: "workspace_id",
+	})
+	evaluator := NewEvaluator(featureflag.NewService(provider))
+
+	snapshot := evaluator.EvaluateForRuntime(context.Background(), testRuntime("00000000-0000-0000-0000-0000000000aa", "daemon-a"))
+	if got := snapshot.Flags[RuntimeBriefSlimFlag]; got != "off" {
+		t.Fatalf("%s = %q, want off because daemon snapshots are process-scoped, not workspace-scoped", RuntimeBriefSlimFlag, got)
 	}
 }
 
