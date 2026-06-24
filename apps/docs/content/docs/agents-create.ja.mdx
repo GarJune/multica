@@ -85,6 +85,14 @@ claude --model <model> --max-turns 100 --append-system-prompt "always respond in
 
 引数はシェルを介さずそのまま渡されるため（注入リスクなし）、特定のフラグが認識されるかどうかは AI コーディングツール自体に依存します。この部分はツールによって大きな差があります。
 
+Hermes profile を指定する場合は、profile フラグと profile 名を 2 つの独立した引数として追加します。たとえば `research` という Hermes profile で起動する場合:
+
+```json
+["-p", "research"]
+```
+
+`"-p research"` のように 1 つの文字列へまとめないでください。Multica は配列の各要素を 1 つの argv エントリとしてツールへ渡します。
+
 <Callout type="tip">
 `custom_env` と `custom_args` には厳格な上限はありませんが、実際には**それぞれ 10 個以内に抑えてください**。多すぎるとコマンドラインが長くなり、起動が遅くなり、メンテナンスも難しくなります。
 </Callout>

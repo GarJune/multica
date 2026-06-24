@@ -85,6 +85,16 @@ claude --model <model> --max-turns 100 --append-system-prompt "always respond in
 
 Arguments are passed as-is, not through a shell (no injection risk), but whether a given flag is recognized is up to the AI coding tool itself — tools differ substantially here.
 
+For Hermes profiles, add the profile flag and profile name as two separate
+arguments. For example, to launch Hermes with a profile named `research`:
+
+```json
+["-p", "research"]
+```
+
+Do not combine them into one string like `"-p research"`; Multica passes each
+array item as one argv entry.
+
 <Callout type="tip">
 `custom_env` and `custom_args` have no hard caps, but in practice **keep each under 10 entries**. Too many makes the command line long, slows startup, and gets harder to maintain.
 </Callout>

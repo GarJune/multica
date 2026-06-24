@@ -85,6 +85,14 @@ claude --model <model> --max-turns 100 --append-system-prompt "always respond in
 
 参数按原样传，不走 shell 解析（没有注入风险），但传什么 flag 能不能被识别看 AI 编程工具本身——不同工具差异很大。
 
+如果要让 Hermes 使用指定 profile，把 profile flag 和 profile 名写成两个独立参数。例如使用名为 `research` 的 Hermes profile：
+
+```json
+["-p", "research"]
+```
+
+不要合成一个字符串 `"-p research"`；Multica 会把数组里的每一项作为一个独立 argv 参数传给工具。
+
 <Callout type="tip">
 `custom_env` 和 `custom_args` 没有硬限制，但**实际使用建议控制在 10 条以内**。太多会让命令行变长、启动变慢，也更难维护。
 </Callout>
