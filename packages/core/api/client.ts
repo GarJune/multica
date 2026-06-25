@@ -111,6 +111,8 @@ import type {
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
+  ListSlackInstallationsResponse,
+  BeginSlackInstallResponse,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -2238,6 +2240,30 @@ export class ApiClient {
     return this.fetch(`/api/lark/binding/redeem`, {
       method: "POST",
       body: JSON.stringify({ token }),
+    });
+  }
+
+  // Slack integration (MUL-3666)
+  async listSlackInstallations(workspaceId: string): Promise<ListSlackInstallationsResponse> {
+    return this.fetch(`/api/workspaces/${workspaceId}/slack/installations`);
+  }
+
+  // beginSlackInstall returns the Slack OAuth authorize URL. Unlike Feishu's
+  // device-flow QR, the caller redirects the browser (openExternal) to this
+  // URL; Slack bounces back to the backend callback which lands the install.
+  async beginSlackInstall(
+    workspaceId: string,
+    agentId: string,
+  ): Promise<BeginSlackInstallResponse> {
+    const search = new URLSearchParams({ agent_id: agentId });
+    return this.fetch(`/api/workspaces/${workspaceId}/slack/install/begin?${search.toString()}`, {
+      method: "POST",
+    });
+  }
+
+  async deleteSlackInstallation(workspaceId: string, installationId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/slack/installations/${installationId}`, {
+      method: "DELETE",
     });
   }
 }
