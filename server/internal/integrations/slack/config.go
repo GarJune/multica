@@ -97,6 +97,27 @@ func botUserIDFromConfig(raw json.RawMessage) (string, error) {
 	return cfg.BotUserID, nil
 }
 
+// PublicConfig is the non-secret subset of an installation config, safe to
+// surface on the management API (the encrypted bot token is never included).
+type PublicConfig struct {
+	AppID     string
+	TeamID    string
+	BotUserID string
+}
+
+// DecodePublicConfig extracts the display-safe fields from a stored config blob.
+// A decode miss yields a zero-value PublicConfig rather than an error: the
+// management list should still render the row's identity columns.
+func DecodePublicConfig(raw json.RawMessage) PublicConfig {
+	var cfg installConfig
+	_ = json.Unmarshal(raw, &cfg)
+	teamID := cfg.TeamID
+	if teamID == "" {
+		teamID = cfg.AppID
+	}
+	return PublicConfig{AppID: cfg.AppID, TeamID: teamID, BotUserID: cfg.BotUserID}
+}
+
 // decryptToken base64-decodes the stored ciphertext (tolerating the MIME
 // newline wrapping PostgreSQL's encode(...,'base64') emits) and runs it through
 // the injected Decrypter. An empty stored value decodes to an empty token; a

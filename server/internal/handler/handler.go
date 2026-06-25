@@ -181,7 +181,12 @@ type Handler struct {
 	// no per-installation lease, so shutdown just cancels its context — no join
 	// needed for correctness.
 	SlackConnector *slack.AppConnector
-	cfg            Config
+	// SlackInstall owns the Slack OAuth self-serve install lifecycle (begin /
+	// callback / list / revoke) and the at-rest encryption of the per-workspace
+	// bot token (MUL-3666). Nil unless MULTICA_SLACK_SECRET_KEY is set;
+	// InstallSupported() additionally requires the OAuth client credentials.
+	SlackInstall *slack.InstallService
+	cfg          Config
 }
 
 func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {

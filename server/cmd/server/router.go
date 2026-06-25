@@ -427,6 +427,38 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			slack.NewOutbound(queries, box.Open, slog.Default()).Register(bus)
 			slog.Info("slack integration enabled")
 
+			// OAuth self-serve install. The hosted Slack app's client
+			// credentials are deployment-level; the redirect URL defaults to
+			// {MULTICA_PUBLIC_URL}/api/slack/oauth/callback (override with
+			// MULTICA_SLACK_REDIRECT_URL). The InstallService is built whenever
+			// the secret key is present so listing / revoking existing installs
+			// works; Begin/Complete additionally require the client credentials
+			// (InstallSupported()).
+			redirectURL := strings.TrimSpace(os.Getenv("MULTICA_SLACK_REDIRECT_URL"))
+			if redirectURL == "" && signupConfig.PublicURL != "" {
+				redirectURL = signupConfig.PublicURL + "/api/slack/oauth/callback"
+			}
+			var slackScopes []string
+			if rawScopes := strings.TrimSpace(os.Getenv("MULTICA_SLACK_SCOPES")); rawScopes != "" {
+				slackScopes = splitAndTrim(rawScopes)
+			}
+			installSvc, ierr := slack.NewInstallService(queries, box, slack.OAuthConfig{
+				ClientID:     strings.TrimSpace(os.Getenv("MULTICA_SLACK_CLIENT_ID")),
+				ClientSecret: strings.TrimSpace(os.Getenv("MULTICA_SLACK_CLIENT_SECRET")),
+				RedirectURL:  redirectURL,
+				Scopes:       slackScopes,
+			}, slog.Default())
+			if ierr != nil {
+				slog.Error("slack: InstallService init failed; install disabled", "error", ierr)
+			} else {
+				h.SlackInstall = installSvc
+				if installSvc.InstallSupported() {
+					slog.Info("slack oauth install enabled")
+				} else {
+					slog.Info("slack oauth install disabled (MULTICA_SLACK_CLIENT_ID/SECRET or redirect URL not set); listing/revoke still work")
+				}
+			}
+
 			if appToken := strings.TrimSpace(os.Getenv("MULTICA_SLACK_APP_TOKEN")); appToken != "" {
 				h.SlackConnector = slack.NewAppConnector(slack.AppConnectorConfig{
 					AppToken: appToken,
@@ -571,6 +603,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
 	r.Get("/api/github/setup", h.GitHubSetupCallback)
+	// Slack OAuth callback (no Multica auth in the path — it is hit by Slack's
+	// browser redirect; the workspace/agent/initiator are recovered from the
+	// sealed state). It exchanges the code, upserts the install, then bounces
+	// the browser back to Settings → Integrations.
+	r.Get("/api/slack/oauth/callback", h.SlackOAuthCallback)
 	// Stripe webhook (no Multica auth — Stripe signs the raw body
 	// with a shared secret, the multica-cloud upstream verifies. We
 	// only forward the bytes + the Stripe-Signature header; see
@@ -722,6 +759,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// terminal failure.
 					r.Post("/lark/install/begin", h.BeginLarkInstall)
 					r.Get("/lark/install/{sessionId}/status", h.GetLarkInstallStatus)
+				})
+
+				// Slack integration (MUL-3666). Same admin/member split as
+				// Lark: listing is member-visible; OAuth begin + revoke are
+				// admin-only. The OAuth callback itself is a public route (it is
+				// hit by Slack's browser redirect with no workspace in the path)
+				// and is registered outside this workspace group.
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
+					r.Get("/slack/installations", h.ListSlackInstallations)
+				})
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+					r.Delete("/slack/installations/{installationId}", h.RevokeSlackInstallation)
+					r.Post("/slack/install/begin", h.BeginSlackInstall)
 				})
 			})
 		})
