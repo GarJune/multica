@@ -21,6 +21,7 @@ export interface UseIssueActionsResult {
   copyLink: () => Promise<void>;
   openCreateSubIssue: () => void;
   openSetParent: () => void;
+  removeParent: () => void;
   openAddChild: () => void;
   openDeleteConfirm: (opts?: { onDeletedNavigateTo?: string }) => void;
 }
@@ -133,6 +134,27 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     openModal("issue-set-parent", { issueId });
   }, [openModal, issueId]);
 
+  // Detach from the parent and promote to a standalone issue. Reversible
+  // (Set parent re-links it), non-destructive, and mirrors the clear-date
+  // actions — so it applies directly with a success toast instead of a
+  // confirm modal. `stage` only orders sub-issues under a parent, so clear
+  // it in the same write to avoid an orphaned value on a standalone issue.
+  const removeParent = useCallback(() => {
+    if (!issueId) return;
+    updateIssue.mutate(
+      { id: issueId, parent_issue_id: null, stage: null },
+      {
+        onError: (err) =>
+          toast.error(
+            err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.detail.update_failed),
+          ),
+      },
+    );
+    toast.success(t(($) => $.actions.remove_parent_issue_success));
+  }, [issueId, updateIssue, t]);
+
   const openAddChild = useCallback(() => {
     if (!issueId) return;
     openModal("issue-add-child", { issueId });
@@ -157,6 +179,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     copyLink,
     openCreateSubIssue,
     openSetParent,
+    removeParent,
     openAddChild,
     openDeleteConfirm,
   };

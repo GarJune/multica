@@ -74,6 +74,7 @@ vi.mock("sonner", () => ({
 }));
 
 // Import AFTER mocks are registered.
+import { toast } from "sonner";
 import { useIssueActions } from "../use-issue-actions";
 
 const mockIssue: Issue = {
@@ -109,6 +110,8 @@ beforeEach(() => {
   mockUpdateMutate.mockReset();
   mockCreatePinMutate.mockReset();
   mockDeletePinMutate.mockReset();
+  vi.mocked(toast.success).mockReset();
+  vi.mocked(toast.error).mockReset();
   pinListRef.value = [];
   localStorage.clear();
   Object.defineProperty(navigator, "clipboard", {
@@ -230,6 +233,27 @@ describe("useIssueActions", () => {
       identifier: "TES-1",
       onDeletedNavigateTo: "/test/issues",
     });
+  });
+
+  it("removeParent clears parent_issue_id and stage in one write and toasts success", () => {
+    const childIssue = {
+      ...mockIssue,
+      parent_issue_id: "parent-1",
+      stage: 2,
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(childIssue), { wrapper });
+
+    act(() => {
+      result.current.removeParent();
+    });
+
+    expect(mockUpdateMutate).toHaveBeenCalledWith(
+      { id: "issue-1", parent_issue_id: null, stage: null },
+      expect.any(Object),
+    );
+    expect(toast.success).toHaveBeenCalled();
+    // Detaching never routes through the run-confirm modal.
+    expect(mockOpenModal).not.toHaveBeenCalled();
   });
 
   it("togglePin calls createPin when not pinned and deletePin when pinned", async () => {
