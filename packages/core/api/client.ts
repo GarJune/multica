@@ -111,8 +111,9 @@ import type {
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
+  SlackInstallation,
   ListSlackInstallationsResponse,
-  BeginSlackInstallResponse,
+  RegisterSlackBYORequest,
   RedeemSlackBindingTokenResponse,
   Squad,
   SquadMember,
@@ -2249,16 +2250,18 @@ export class ApiClient {
     return this.fetch(`/api/workspaces/${workspaceId}/slack/installations`);
   }
 
-  // beginSlackInstall returns the Slack OAuth authorize URL. Unlike Feishu's
-  // device-flow QR, the caller redirects the browser (openExternal) to this
-  // URL; Slack bounces back to the backend callback which lands the install.
-  async beginSlackInstall(
+  // registerSlackBYO performs a bring-your-own-app install: the admin pastes the
+  // bot token (xoxb-) + app-level token (xapp-) of the Slack app they created,
+  // and the backend validates + persists it, returning the new installation.
+  async registerSlackBYO(
     workspaceId: string,
     agentId: string,
-  ): Promise<BeginSlackInstallResponse> {
+    body: RegisterSlackBYORequest,
+  ): Promise<SlackInstallation> {
     const search = new URLSearchParams({ agent_id: agentId });
-    return this.fetch(`/api/workspaces/${workspaceId}/slack/install/begin?${search.toString()}`, {
+    return this.fetch(`/api/workspaces/${workspaceId}/slack/install/byo?${search.toString()}`, {
       method: "POST",
+      body: JSON.stringify(body),
     });
   }
 

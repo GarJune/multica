@@ -20,7 +20,7 @@ const installationsRef = vi.hoisted(() => ({
     install_supported: true,
   },
 }));
-const mockBeginInstall = vi.hoisted(() => vi.fn());
+const mockRegisterBYO = vi.hoisted(() => vi.fn());
 const mockDeleteInstallation = vi.hoisted(() => vi.fn());
 const mockOpenExternal = vi.hoisted(() => vi.fn());
 const mockInvalidate = vi.hoisted(() => vi.fn());
@@ -70,7 +70,7 @@ vi.mock("@multica/core/slack", () => ({
 
 vi.mock("@multica/core/api", () => ({
   api: {
-    beginSlackInstall: mockBeginInstall,
+    registerSlackBYO: mockRegisterBYO,
     deleteSlackInstallation: mockDeleteInstallation,
   },
 }));
@@ -111,13 +111,22 @@ function resetFixtures() {
 describe("SlackAgentBindButton", () => {
   beforeEach(resetFixtures);
 
-  it("renders the Connect CTA and hands the OAuth URL to openExternal", async () => {
-    mockBeginInstall.mockResolvedValue({ url: "https://slack.com/oauth/v2/authorize?x=1" });
+  it("opens the BYO dialog and submits the pasted bot + app tokens", async () => {
+    mockRegisterBYO.mockResolvedValue({ id: "i1", agent_id: "agent-1", status: "active" });
     renderUI(<SlackAgentBindButton agentId="agent-1" agentName="Bot" />);
-    const btn = screen.getByTestId("slack-agent-connect");
-    await userEvent.click(btn);
-    await waitFor(() => expect(mockBeginInstall).toHaveBeenCalledWith("workspace-1", "agent-1"));
-    expect(mockOpenExternal).toHaveBeenCalledWith("https://slack.com/oauth/v2/authorize?x=1");
+    await userEvent.click(screen.getByTestId("slack-agent-connect"));
+    const botInput = await screen.findByTestId("slack-byo-bot-token");
+    await userEvent.type(botInput, "xoxb-bot");
+    await userEvent.type(screen.getByTestId("slack-byo-app-token"), "xapp-1-A0X-1-secret");
+    await userEvent.click(screen.getByTestId("slack-byo-submit"));
+    await waitFor(() =>
+      expect(mockRegisterBYO).toHaveBeenCalledWith("workspace-1", "agent-1", {
+        bot_token: "xoxb-bot",
+        app_token: "xapp-1-A0X-1-secret",
+      }),
+    );
+    // No OAuth redirect anymore — install is a direct API call.
+    expect(mockOpenExternal).not.toHaveBeenCalled();
   });
 
   it("shows the connected badge (not the CTA) when the agent already has an active install", () => {
@@ -138,7 +147,7 @@ describe("SlackAgentBindButton", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders nothing when OAuth install is not supported and the agent is unbound", () => {
+  it("renders nothing when install is unavailable and the agent is unbound", () => {
     installationsRef.current = { installations: [], configured: true, install_supported: false };
     const { container } = renderUI(<SlackAgentBindButton agentId="agent-1" />);
     expect(container).toBeEmptyDOMElement();

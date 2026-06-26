@@ -8,6 +8,16 @@ import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
+import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -227,13 +237,19 @@ function InstallationRow({
   );
 }
 
+// SLACK_BYO_VIDEO_URL is the optional setup-tutorial video linked from the
+// connect dialog. Leave "" to hide the link; set it once the walkthrough that
+// shows how to create the Slack app + copy its two tokens is recorded.
+const SLACK_BYO_VIDEO_URL = "";
+
 // SlackAgentBindButton is the per-agent CTA exposed from the agent detail page.
-// Visibility rules mirror LarkAgentBindButton:
-//   1. Non-owner/admin viewers see nothing (the backend gates begin/revoke).
+// Slack uses the bring-your-own-app model: the button opens a dialog where the
+// admin pastes the bot token (xoxb-) + app-level token (xapp-) of the Slack app
+// they created (the backend validates both belong to the same app). Visibility:
+//   1. Non-owner/admin viewers see nothing (the backend gates install/revoke).
 //   2. If this agent already has an active installation, show the connected
-//      badge regardless of install_supported (already-installed bots stay
-//      manageable even if the OAuth client config is later removed).
-//   3. Otherwise the Connect CTA shows only when install_supported is true.
+//      badge (already-installed bots stay manageable).
+//   3. Otherwise the Connect CTA shows whenever install is available.
 export function SlackAgentBindButton({
   agentId,
   agentName,
@@ -253,8 +269,13 @@ export function SlackAgentBindButton({
 }) {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
+  const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
-  const [connecting, setConnecting] = useState(false);
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [botToken, setBotToken] = useState("");
+  const [appToken, setAppToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const { data: listing } = useQuery({
     ...slackInstallationsOptions(wsId),
@@ -288,24 +309,38 @@ export function SlackAgentBindButton({
 
   if (!installSupported) return null;
 
-  async function handleConnect() {
-    if (connecting || !agentId) return;
-    setConnecting(true);
+  function closeDialog() {
+    if (submitting) return;
+    setDialogOpen(false);
+    setBotToken("");
+    setAppToken("");
+  }
+
+  async function handleSubmit() {
+    const bot_token = botToken.trim();
+    const app_token = appToken.trim();
+    if (submitting || !agentId || !bot_token || !app_token) return;
+    setSubmitting(true);
     try {
-      const res = await api.beginSlackInstall(wsId, agentId);
-      // Hand the OAuth URL to the system browser (desktop) / a new tab (web).
-      // Slack bounces back to the backend callback, which lands the install and
-      // redirects to Settings; the slack_installation:created realtime event
-      // refreshes this list when the user returns.
-      openExternal(res.url);
+      await api.registerSlackBYO(wsId, agentId, { bot_token, app_token });
+      // The slack_installation realtime event also refreshes this list, but
+      // invalidate explicitly so the connected badge appears immediately.
+      await qc.invalidateQueries({ queryKey: slackKeys.installations(wsId) });
+      toast.success(t(($) => $.slack.byo_success_toast));
+      setDialogOpen(false);
+      setBotToken("");
+      setAppToken("");
     } catch (e) {
       toast.error(
-        e instanceof Error ? e.message : t(($) => $.slack.connect_failed_toast),
+        e instanceof Error ? e.message : t(($) => $.slack.byo_failed_toast),
       );
     } finally {
-      setConnecting(false);
+      setSubmitting(false);
     }
   }
+
+  const canSubmit =
+    botToken.trim() !== "" && appToken.trim() !== "" && !submitting;
 
   return (
     <div
@@ -315,8 +350,8 @@ export function SlackAgentBindButton({
       <Button
         variant="outline"
         size="sm"
-        onClick={handleConnect}
-        disabled={!agentId || connecting}
+        onClick={() => setDialogOpen(true)}
+        disabled={!agentId}
         title={
           agentName
             ? t(($) => $.slack.bind_button_title, { agent: agentName })
@@ -325,10 +360,94 @@ export function SlackAgentBindButton({
         data-testid="slack-agent-connect"
       >
         <MessagesSquare className="h-3 w-3" />
-        {connecting
-          ? t(($) => $.slack.connecting)
-          : t(($) => $.slack.bind_button)}
+        {t(($) => $.slack.bind_button)}
       </Button>
+
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(v) => (v ? setDialogOpen(true) : closeDialog())}
+      >
+        <DialogContent className="sm:max-w-lg" data-testid="slack-byo-dialog">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.slack.byo_dialog_title)}</DialogTitle>
+            <DialogDescription>
+              {t(($) => $.slack.byo_dialog_intro)}
+            </DialogDescription>
+          </DialogHeader>
+
+          {SLACK_BYO_VIDEO_URL ? (
+            <button
+              type="button"
+              onClick={() => openExternal(SLACK_BYO_VIDEO_URL)}
+              className="inline-flex w-fit items-center gap-1.5 text-xs font-medium text-primary underline-offset-2 hover:underline"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t(($) => $.slack.byo_video_cta)}
+            </button>
+          ) : null}
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="slack-byo-bot-token">
+                {t(($) => $.slack.byo_bot_token_label)}
+              </Label>
+              <Input
+                id="slack-byo-bot-token"
+                data-testid="slack-byo-bot-token"
+                value={botToken}
+                onChange={(e) => setBotToken(e.target.value)}
+                placeholder="xoxb-…"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={submitting}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {t(($) => $.slack.byo_bot_token_hint)}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="slack-byo-app-token">
+                {t(($) => $.slack.byo_app_token_label)}
+              </Label>
+              <Input
+                id="slack-byo-app-token"
+                data-testid="slack-byo-app-token"
+                value={appToken}
+                onChange={(e) => setAppToken(e.target.value)}
+                placeholder="xapp-…"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={submitting}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {t(($) => $.slack.byo_app_token_hint)}
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={closeDialog}
+              disabled={submitting}
+            >
+              {t(($) => $.slack.byo_cancel)}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              data-testid="slack-byo-submit"
+            >
+              {submitting
+                ? t(($) => $.slack.byo_submitting)
+                : t(($) => $.slack.byo_submit)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

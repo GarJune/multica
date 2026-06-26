@@ -25,19 +25,20 @@ export interface ListSlackInstallationsResponse {
    * the connect entry points are hidden and the panel renders an "ask the
    * operator to enable Slack" state. */
   configured: boolean;
-  /** Whether the OAuth self-serve install path is wired (the hosted Slack
-   * app's client credentials are set). When false, connect entry points are
-   * hidden but already-installed bots stay manageable. Optional so an older
-   * desktop build hitting a server that predates the field treats it as not
-   * supported. */
+  /** Whether the install path is available (true whenever Slack is configured,
+   * i.e. the at-rest key is set — a bring-your-own-app install needs no hosted
+   * OAuth credentials). Kept as a separate flag for forward/backward compat;
+   * optional so an older desktop build that predates it treats it as off. */
   install_supported?: boolean;
 }
 
-/** The Slack OAuth begin response: the authorize URL the browser is sent to.
- * Unlike Feishu's device-flow QR, this is a redirect — Slack bounces back to
- * the backend callback, which lands the install and redirects to Settings. */
-export interface BeginSlackInstallResponse {
-  url: string;
+/** Request body for a bring-your-own-app (BYO) install: the two tokens the
+ * admin pastes from the Slack app they created. The backend validates that both
+ * belong to the same Slack app (and that the app token is live) before
+ * persisting, then returns the created SlackInstallation. */
+export interface RegisterSlackBYORequest {
+  bot_token: string;
+  app_token: string;
 }
 
 /** Post-redemption echo: the Slack user id the token carried is now bound to
