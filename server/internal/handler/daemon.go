@@ -1637,8 +1637,18 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 				return h.Queries.ListChatMessages(r.Context(), cs.ID)
 			}(); err == nil && len(msgs) > 0 {
+				// Pick the prompt window. When a provider session was resumed
+				// (resp.PriorSessionID populated above, for either threaded or
+				// legacy chat), the model already retains prior turns, so we
+				// send only the trailing run of unanswered user messages — the
+				// same economy the session path always used. We replay the FULL
+				// thread transcript only when starting a fresh/poisoned session
+				// (no PriorSessionID) so the new session can rebuild context.
+				// Without this split, threaded resume double-fed history
+				// (resumed memory + full transcript), bloating tokens as the
+				// thread grew.
 				unanswered := msgs
-				if !task.ChatThreadID.Valid {
+				if !task.ChatThreadID.Valid || resp.PriorSessionID != "" {
 					unanswered = trailingUserMessages(msgs)
 				}
 				parts := make([]string, 0, len(unanswered))

@@ -100,6 +100,18 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		Title:       req.Title,
 	})
 	if err != nil {
+		// A concurrent create can win the unique scope index
+		// (idx_chat_session_scope) in the window between the GetPrivate check
+		// above and this insert. Re-resolve before failing so the loser of the
+		// race returns the canonical session (200) instead of a spurious 500.
+		if existing, reErr := h.Queries.GetPrivateChatSessionForAgentCreator(r.Context(), db.GetPrivateChatSessionForAgentCreatorParams{
+			WorkspaceID: workspaceUUID,
+			AgentID:     agentID,
+			CreatorID:   parseUUID(userID),
+		}); reErr == nil {
+			writeJSON(w, http.StatusOK, chatSessionToResponse(existing))
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create chat session")
 		return
 	}

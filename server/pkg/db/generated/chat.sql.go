@@ -226,7 +226,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 
 const createChatThread = `-- name: CreateChatThread :one
 INSERT INTO chat_thread (chat_session_id, title, created_by)
-VALUES ($1, $2, $3)
+VALUES ($1, LEFT($2::text, 120), $3)
 RETURNING id, chat_session_id, legacy_chat_session_id, legacy_thread_task_id, root_message_id, title, status, created_by, created_at, updated_at
 `
 
@@ -236,6 +236,8 @@ type CreateChatThreadParams struct {
 	CreatedBy     pgtype.UUID `json:"created_by"`
 }
 
+// Title is capped at 120 chars here so the cap lives in one place (DB), matching
+// SetChatThreadRootMessage's LEFT(...,120); callers may pass the full message.
 func (q *Queries) CreateChatThread(ctx context.Context, arg CreateChatThreadParams) (ChatThread, error) {
 	row := q.db.QueryRow(ctx, createChatThread, arg.ChatSessionID, arg.Title, arg.CreatedBy)
 	var i ChatThread

@@ -59,8 +59,15 @@ ALTER TABLE chat_message
 ALTER TABLE agent_task_queue
   ADD COLUMN chat_thread_id UUID REFERENCES chat_thread(id) ON DELETE SET NULL;
 
--- Pick the canonical private DM conversation per (workspace, agent, creator).
--- Channel conversations are intentionally excluded and stay independent.
+-- PRODUCT DECISION (not a side effect): collapse to exactly ONE private DM
+-- conversation per (workspace, agent, creator). Any extra historical private DM
+-- sessions a user accumulated with the same agent are merged into the earliest
+-- (canonical) one; the others are archived and pointed at it via
+-- superseded_by_chat_session_id. Channel conversations are intentionally
+-- excluded and stay independent. The reverse of this archival is restored by
+-- the down-migration. Validate against a production snapshot before shipping:
+-- assert the post-migration active-session count and message/attachment
+-- re-parenting match expectations.
 WITH canonical_private AS (
   SELECT id,
          FIRST_VALUE(id) OVER (

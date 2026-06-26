@@ -97,8 +97,10 @@ UPDATE chat_session SET updated_at = now()
 WHERE id = $1;
 
 -- name: CreateChatThread :one
+-- Title is capped at 120 chars here so the cap lives in one place (DB), matching
+-- SetChatThreadRootMessage's LEFT(...,120); callers may pass the full message.
 INSERT INTO chat_thread (chat_session_id, title, created_by)
-VALUES ($1, $2, $3)
+VALUES ($1, LEFT(sqlc.arg(title)::text, 120), sqlc.arg(created_by))
 RETURNING *;
 
 -- name: GetChatThreadInSession :one

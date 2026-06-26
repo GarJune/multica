@@ -349,7 +349,11 @@ function ChatSurface({ mode, routeAgentId }: ChatSurfaceProps) {
   // returns "loading" while queries are still resolving — pass `undefined`
   // downstream so banners and pill copy stay silent during loading rather
   // than flash speculative offline text.
-  const presenceDetail = useAgentPresenceDetail(wsId, activeAgent?.id);
+  // Key presence on the DISPLAYED agent, not the assignable one: in page mode
+  // an agent the viewer can't assign (e.g. someone else's private agent) still
+  // resolves as `routeAgent`, so its real online/offline state surfaces in the
+  // header dot and OfflineBanner instead of falling back to neutral.
+  const presenceDetail = useAgentPresenceDetail(wsId, displayAgent?.id);
   const availability =
     presenceDetail === "loading" ? undefined : presenceDetail.availability;
 
@@ -814,7 +818,7 @@ function ChatSurface({ mode, routeAgentId }: ChatSurfaceProps) {
   const statusBanner = noAgent ? (
     <NoAgentBanner />
   ) : (
-    <OfflineBanner agentName={activeAgent?.name} availability={availability} />
+    <OfflineBanner agentName={displayAgent?.name ?? activeAgent?.name} availability={availability} />
   );
 
   const composer = (
@@ -1084,7 +1088,7 @@ function isThreadReplyMessage(message: ChatMessage): boolean {
   return !!threadTaskId && !!message.task_id && threadTaskId !== message.task_id;
 }
 
-function buildThreadTimeline(messages: ChatMessage[]): ThreadTimelineEntry[] {
+export function buildThreadTimeline(messages: ChatMessage[]): ThreadTimelineEntry[] {
   const timeline: ThreadTimelineEntry[] = [];
   const threadsByThreadKey = new Map<string, ChatThread>();
   const pendingRepliesByThreadKey = new Map<string, ChatMessage[]>();
@@ -1142,6 +1146,36 @@ function buildThreadTimeline(messages: ChatMessage[]): ThreadTimelineEntry[] {
     } else {
       timeline.push({ kind: "standalone-assistant", message });
     }
+  }
+
+  // Fallback: any reply we buffered but never matched to a root (a legacy /
+  // racy keying mismatch where a reply's thread key never resolves to a
+  // surfaced root) must still be visible — a persisted message is never
+  // silently dropped. Surface each orphan in chronological order as its own
+  // entry, and warn so the mismatch is observable rather than a black hole.
+  if (pendingRepliesByThreadKey.size > 0) {
+    const orphans = [...pendingRepliesByThreadKey.values()]
+      .flat()
+      .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    for (const message of orphans) {
+      if (message.role === "user") {
+        timeline.push({
+          kind: "thread",
+          thread: {
+            id: messageThreadKey(message) ?? message.id,
+            chatThreadId: message.chat_thread_id ?? null,
+            threadTaskId: messageThreadTaskId(message),
+            root: message,
+            replies: [],
+          },
+        });
+      } else {
+        timeline.push({ kind: "standalone-assistant", message });
+      }
+    }
+    uiLogger.warn("buildThreadTimeline: unmatched thread replies surfaced as fallback", {
+      orphanCount: orphans.length,
+    });
   }
 
   return timeline;
