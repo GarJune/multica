@@ -73,7 +73,7 @@ describe("inbox item-type registry", () => {
 
     const convo = getInboxItemRenderer("conversation");
     expect(typeof convo.Row).toBe("function");
-    // Conversations open the chat window, so they intentionally have no pane.
-    expect(convo.Detail).toBeUndefined();
+    // Conversations open inline in the detail pane (like an issue).
+    expect(typeof convo.Detail).toBe("function");
   });
 });

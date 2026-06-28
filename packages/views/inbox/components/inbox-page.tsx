@@ -62,14 +62,21 @@ export function InboxPage() {
   const { t } = useT("inbox");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const urlConversation = searchParams.get("conversation") ?? "";
   const wsPaths = useWorkspacePaths();
 
   const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
+  const [selectedConversationId, setSelectedConversationId] = useState(
+    () => urlConversation,
+  );
 
   // Sync from URL when searchParams change (e.g. navigation)
   useEffect(() => {
     setSelectedKeyState(urlIssue);
   }, [urlIssue]);
+  useEffect(() => {
+    setSelectedConversationId(urlConversation);
+  }, [urlConversation]);
 
   const wsId = useWorkspaceId();
   const { data: rawItems = [], isLoading: loading } = useQuery(inboxListOptions(wsId));
@@ -93,6 +100,8 @@ export function InboxPage() {
   }, [items, sessions]);
 
   const selected = items.find((i) => (i.issue_id ?? i.id) === selectedKey) ?? null;
+  const selectedConversation =
+    sessions.find((s) => s.id === selectedConversationId) ?? null;
 
   // Notifications backed by an issue defer to the shared IssueDetail surface;
   // everything else renders the detail pane its item-type renderer provides.
@@ -112,9 +121,19 @@ export function InboxPage() {
 
   const setSelectedKey = useCallback((key: string) => {
     setSelectedKeyState(key);
+    setSelectedConversationId("");
     const inboxPath = wsPaths.inbox();
     const url = key ? `${inboxPath}?issue=${key}` : inboxPath;
     replace(url);
+  }, [replace, wsPaths]);
+
+  // Open a conversation in the detail pane (like opening an issue), clearing
+  // any notification selection. The floating chat window is intentionally not
+  // involved — it is being deprecated in favour of this inline surface.
+  const selectConversation = useCallback((id: string) => {
+    setSelectedConversationId(id);
+    setSelectedKeyState("");
+    replace(`${wsPaths.inbox()}?conversation=${id}`);
   }, [replace, wsPaths]);
 
   // Shared inbox links (?issue=<id>) may point to notifications not in this
@@ -306,13 +325,14 @@ export function InboxPage() {
             key={`${entry.kind}:${entry.id}`}
             entry={entry}
             isSelected={
-              isNotification &&
-              (entry.notification.issue_id ?? entry.notification.id) === selectedKey
+              isNotification
+                ? (entry.notification.issue_id ?? entry.notification.id) === selectedKey
+                : entry.id === selectedConversationId
             }
             onSelect={() => {
-              // Conversations self-open the chat window in their renderer;
-              // notifications select into the detail pane.
+              // Both kinds open into the same detail pane.
               if (isNotification) handleSelect(entry.notification);
+              else selectConversation(entry.id);
             }}
             onArchive={() => {
               if (isNotification) handleArchive(entry.notification.id);
@@ -323,7 +343,13 @@ export function InboxPage() {
     </div>
   );
 
-  const detailContent = selected?.issue_id ? (
+  const ConversationDetailComp = getInboxItemRenderer("conversation").Detail;
+  const detailContent = selectedConversation && ConversationDetailComp ? (
+    <ConversationDetailComp
+      entry={conversationEntry(selectedConversation)}
+      onArchive={() => {}}
+    />
+  ) : selected?.issue_id ? (
     // Key by issue_id (not inbox-item id): a new comment/reaction generates a
     // new inbox notification for the same issue, and the dedup helper picks the
     // newest one — keying on its id would remount IssueDetail on every event,
@@ -379,7 +405,7 @@ export function InboxPage() {
     }
 
     // Mobile: show detail full-screen when an item is selected
-    if (selected) {
+    if (selected || selectedConversation) {
       return (
         <div className="flex flex-1 flex-col min-h-0">
           <div className="flex h-12 shrink-0 items-center border-b px-2">
