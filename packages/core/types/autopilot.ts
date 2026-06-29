@@ -49,6 +49,11 @@ export interface Autopilot {
   // List endpoint returns []; only the detail endpoint populates this.
   // Treat undefined as empty on older servers.
   subscribers?: AutopilotSubscriber[];
+  // Whether the requesting user may edit / delete / trigger / manage this
+  // autopilot (creator, workspace owner/admin, or a granted collaborator).
+  // Present on list and detail responses; absent on older servers — treat
+  // undefined as "unknown" rather than "denied" (the server is the gate).
+  can_write?: boolean;
 }
 
 export interface WebhookEventFilter {
@@ -60,6 +65,19 @@ export interface AutopilotSubscriber {
   user_type: "member";
   user_id: string;
   created_at: string;
+}
+
+// A workspace member explicitly granted write access to an autopilot, on top
+// of the implicit "creator ∪ owner/admin" set. Members-only for now.
+export interface AutopilotCollaborator {
+  user_type: "member";
+  user_id: string;
+  granted_by: string;
+  created_at: string;
+}
+
+export interface AutopilotCollaboratorsResponse {
+  collaborators: AutopilotCollaborator[];
 }
 
 export interface AutopilotTrigger {
@@ -164,6 +182,9 @@ export interface ListAutopilotsResponse {
 export interface GetAutopilotResponse {
   autopilot: Autopilot;
   triggers: AutopilotTrigger[];
+  // Members explicitly granted write access. Absent on older servers — treat
+  // undefined as an empty list.
+  collaborators?: AutopilotCollaborator[];
 }
 
 export interface ListAutopilotRunsResponse {

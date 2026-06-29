@@ -67,9 +67,130 @@ func createAutopilotAs(t *testing.T, userID, title string) string {
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM autopilot_run WHERE autopilot_id = $1`, ap.ID)
 		testPool.Exec(context.Background(), `DELETE FROM autopilot_trigger WHERE autopilot_id = $1`, ap.ID)
+		testPool.Exec(context.Background(), `DELETE FROM autopilot_collaborator WHERE autopilot_id = $1`, ap.ID)
 		testPool.Exec(context.Background(), `DELETE FROM autopilot WHERE id = $1`, ap.ID)
 	})
 	return ap.ID
+}
+
+// grantAutopilotAccess grants the target member write access via the API as the
+// given caller (empty caller = workspace owner), asserting the expected status.
+func grantAutopilotAccess(t *testing.T, caller, apID, targetUserID string, wantStatus int) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	path := "/api/autopilots/" + apID + "/collaborators?workspace_id=" + testWorkspaceID
+	body := map[string]any{"user_id": targetUserID}
+	var r *http.Request
+	if caller == "" {
+		r = newRequest("POST", path, body)
+	} else {
+		r = newRequestAs(caller, "POST", path, body)
+	}
+	r = withURLParam(r, "id", apID)
+	testHandler.AddAutopilotCollaborator(w, r)
+	if w.Code != wantStatus {
+		t.Fatalf("AddAutopilotCollaborator: expected %d, got %d: %s", wantStatus, w.Code, w.Body.String())
+	}
+}
+
+// autopilotCanWrite fetches the detail as the given caller and returns the
+// can_write flag the server stamped for them.
+func autopilotCanWrite(t *testing.T, caller, apID string) bool {
+	t.Helper()
+	w := httptest.NewRecorder()
+	path := "/api/autopilots/" + apID + "?workspace_id=" + testWorkspaceID
+	var r *http.Request
+	if caller == "" {
+		r = newRequest("GET", path, nil)
+	} else {
+		r = newRequestAs(caller, "GET", path, nil)
+	}
+	r = withURLParam(r, "id", apID)
+	testHandler.GetAutopilot(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAutopilot: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Autopilot AutopilotResponse `json:"autopilot"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode autopilot: %v", err)
+	}
+	if got.Autopilot.CanWrite == nil {
+		t.Fatalf("expected can_write to be set on detail response")
+	}
+	return *got.Autopilot.CanWrite
+}
+
+// TestAutopilotCollaborator_GrantedMemberCanWrite verifies the full delegation
+// flow: a non-creator member is blocked, becomes a writer once granted, and is
+// blocked again after the grant is revoked (MUL-3807).
+func TestAutopilotCollaborator_GrantedMemberCanWrite(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	apID := createAutopilotAs(t, "", "ap-collab-grant")
+	member := createPlainMember(t, "ap-collab-grantee@multica.test")
+
+	updateAs := func(caller string) int {
+		w := httptest.NewRecorder()
+		r := newRequestAs(caller, "PATCH", "/api/autopilots/"+apID+"?workspace_id="+testWorkspaceID, map[string]any{"title": "edited by " + caller})
+		r = withURLParam(r, "id", apID)
+		testHandler.UpdateAutopilot(w, r)
+		return w.Code
+	}
+
+	// Before grant: blocked, and can_write=false.
+	if code := updateAs(member); code != http.StatusForbidden {
+		t.Fatalf("pre-grant update: expected 403, got %d", code)
+	}
+	if autopilotCanWrite(t, member, apID) {
+		t.Fatalf("pre-grant: expected can_write=false for member")
+	}
+
+	// Grant.
+	grantAutopilotAccess(t, "", apID, member, http.StatusCreated)
+
+	// After grant: allowed, and can_write=true.
+	if !autopilotCanWrite(t, member, apID) {
+		t.Fatalf("post-grant: expected can_write=true for collaborator")
+	}
+	if code := updateAs(member); code != http.StatusOK {
+		t.Fatalf("post-grant update: expected 200, got %d", code)
+	}
+
+	// Revoke.
+	w := httptest.NewRecorder()
+	r := newRequest("DELETE", "/api/autopilots/"+apID+"/collaborators/"+member+"?workspace_id="+testWorkspaceID, nil)
+	r = withURLParams(r, "id", apID, "userId", member)
+	testHandler.RemoveAutopilotCollaborator(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RemoveAutopilotCollaborator: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// After revoke: blocked again.
+	if code := updateAs(member); code != http.StatusForbidden {
+		t.Fatalf("post-revoke update: expected 403, got %d", code)
+	}
+}
+
+// TestAutopilotCollaborator_NonWriterCannotGrant verifies a member without write
+// access cannot manage the access list, and granting a non-member is rejected.
+func TestAutopilotCollaborator_NonWriterCannotGrant(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	apID := createAutopilotAs(t, "", "ap-collab-guard")
+	stranger := createPlainMember(t, "ap-collab-stranger@multica.test")
+	victim := createPlainMember(t, "ap-collab-victim@multica.test")
+
+	// A non-writer cannot grant access to anyone.
+	grantAutopilotAccess(t, stranger, apID, victim, http.StatusForbidden)
+
+	// Owner granting a non-member (random UUID) is rejected as bad input.
+	grantAutopilotAccess(t, "", apID, "00000000-0000-0000-0000-000000000000", http.StatusBadRequest)
 }
 
 // TestAutopilotWrite_PlainMemberCannotMutateOthers verifies that a workspace

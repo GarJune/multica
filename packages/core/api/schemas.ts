@@ -840,6 +840,8 @@ const AutopilotListItemSchema = z.object({
   trigger_kinds: z.array(z.string()).optional(),
   next_run_at: z.string().nullable().optional(),
   last_run_status: z.string().nullable().optional(),
+  // Per-caller write capability; absent on older servers (treated as unknown).
+  can_write: z.boolean().optional(),
 }).loose();
 
 export const ListAutopilotsResponseSchema = z.object({
