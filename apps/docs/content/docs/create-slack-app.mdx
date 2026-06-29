@@ -1,0 +1,97 @@
+---
+title: Create a Slack app
+description: Step-by-step — create a Slack app from a manifest, install it to your workspace, and grab the bot token and app-level token to connect it to a Multica agent.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Multica's [Slack integration](/slack-bot-integration) is **bring-your-own-app**: you create a Slack app, install it to your Slack workspace, and paste two tokens into Multica. This page walks through that one-time setup. It takes about five minutes and needs no public URL.
+
+At the end you'll have two values to paste into the agent's **Connect Slack** dialog:
+
+- a **Bot token** — starts with `xoxb-`
+- an **App-level token** — starts with `xapp-`
+
+## 1. Create the app from a manifest
+
+1. Go to [https://api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**.
+2. Choose **From a manifest**.
+3. Pick the Slack workspace to install the app into.
+4. Paste the manifest below (the **YAML** tab), review, and create the app.
+
+```yaml
+display_information:
+  name: Multica
+features:
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Multica
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - chat:write
+      - groups:history
+      - im:history
+      - mpim:history
+      - users:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+      - message.channels
+      - message.groups
+      - message.mpim
+  interactivity:
+    is_enabled: false
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+```
+
+The manifest already configures everything Multica needs — bot scopes, event subscriptions, Socket Mode, and the Messages tab — so you don't have to set them by hand. There is **no OAuth redirect URL** because BYO doesn't use OAuth.
+
+<Callout type="info">
+Want the bot to show up under a specific name in Slack? Change `display_information.name` and `features.bot_user.display_name` (e.g. to your agent's name) before creating, or edit it later under **App Home**. Slack shows the bot by its **bot display name**, which can differ from the app name.
+</Callout>
+
+<Callout type="warning">
+Keep `users:read` in the scopes. Multica calls `bots.info` to verify the bot token and app-level token belong to the same app, and that call needs `users:read`. Without it, **Connect** fails.
+</Callout>
+
+## 2. Install the app and copy the Bot token
+
+1. In the app's left nav, open **Install App** (or **OAuth & Permissions**).
+2. Click **Install to Workspace** and approve.
+3. Copy the **Bot User OAuth Token** — it starts with `xoxb-`. This is your **Bot token**.
+
+## 3. Create the App-level token
+
+The app-level token authorizes the Socket Mode connection and can only be created in the console (it isn't available over OAuth).
+
+1. Open **Basic Information → App-Level Tokens**, click **Generate Token and Scopes**.
+2. Give it any name.
+3. Click **Add Scope** and select **`connections:write`** (it's a picker — select it from the list, don't type it).
+4. Click **Generate**, then copy the token — it starts with `xapp-`. This is your **App-level token**.
+
+## 4. Connect it in Multica
+
+1. In Multica, open the agent → **Integrations** tab → **Connect Slack**.
+2. Paste the **Bot token** (`xoxb-`) and the **App-level token** (`xapp-`).
+3. Click **Connect**.
+
+That's it. Now use the bot: `/invite @your-bot` into a channel and `@`-mention it, or DM it from the Slack sidebar's **Apps** section. See [Slack Bot integration](/slack-bot-integration) for usage and `/issue`.
+
+<Callout type="info">
+Doing this for **multiple agents**? Repeat the whole flow once per agent — each agent gets its own Slack app and its own pair of tokens, and they appear as separate bots in your workspace.
+</Callout>
+
+## Next
+
+- [Slack Bot integration](/slack-bot-integration) — connect, use, and manage the bot
+- [Chat integrations](/channels) — how the channel engine works
