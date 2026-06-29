@@ -344,6 +344,69 @@ func TestPreviewCommentTriggers_ExplicitMentionSuppressesAssigneeFallback(t *tes
 	}
 }
 
+func TestCreateComment_TopLevelFollowUpContinuesRecentAgentConversation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	assigneeID := createHandlerTestAgent(t, "Conversation Assignee", nil)
+	conversationAgentID := createHandlerTestAgent(t, "Conversation Target", nil)
+	issueID := createCommentTriggerPreviewIssue(t, "top-level follow-up continues recent agent", "agent", assigneeID)
+
+	rootID := postCommentForTriggerPreviewTest(t, issueID, map[string]any{
+		"content": fmt.Sprintf("[@Target](mention://agent/%s) ping test", conversationAgentID),
+	})
+	if got := countQueuedCommentTriggerTasks(t, issueID, conversationAgentID); got != 1 {
+		t.Fatalf("initial mention queued conversation agent tasks = %d, want 1", got)
+	}
+	if got := countQueuedCommentTriggerTasks(t, issueID, assigneeID); got != 0 {
+		t.Fatalf("initial mention queued assignee tasks = %d, want 0", got)
+	}
+
+	var conversationTaskID string
+	if err := testPool.QueryRow(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now()
+		WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'
+		RETURNING id
+	`, issueID, conversationAgentID).Scan(&conversationTaskID); err != nil {
+		t.Fatalf("complete initial conversation task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := newRequest(http.MethodPost, "/api/issues/"+issueID+"/comments", map[string]any{
+		"content":   "Pong",
+		"parent_id": rootID,
+	})
+	r = withURLParam(r, "id", issueID)
+	r.Header.Set("X-Agent-ID", conversationAgentID)
+	r.Header.Set("X-Task-ID", conversationTaskID)
+	testHandler.CreateComment(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("agent reply: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	followUpContent := "人生的意义是什么?"
+	preview := previewCommentTriggersForTest(t, issueID, CommentTriggerPreviewRequest{
+		Content: followUpContent,
+	})
+	requirePreviewAgents(t, preview, conversationAgentID)
+	if preview.Agents[0].Source != string(commentTriggerSourceConversation) {
+		t.Fatalf("follow-up preview source = %q, want %q", preview.Agents[0].Source, commentTriggerSourceConversation)
+	}
+
+	postCommentForTriggerPreviewTest(t, issueID, map[string]any{
+		"content": followUpContent,
+	})
+	if got := countQueuedCommentTriggerTasks(t, issueID, conversationAgentID); got != 1 {
+		t.Fatalf("top-level follow-up queued conversation agent tasks = %d, want 1", got)
+	}
+	if got := countQueuedCommentTriggerTasks(t, issueID, assigneeID); got != 0 {
+		t.Fatalf("top-level follow-up queued assignee tasks = %d, want 0", got)
+	}
+}
+
 func TestPreviewCommentTriggers_MemberMentionSuppressesAssigneeFallback(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

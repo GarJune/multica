@@ -1002,6 +1002,7 @@ const (
 	commentTriggerSourceMentionAgent       commentAgentTriggerSource = "mention_agent"
 	commentTriggerSourceMentionSquadLeader commentAgentTriggerSource = "mention_squad_leader"
 	commentTriggerSourceThreadParent       commentAgentTriggerSource = "thread_parent"
+	commentTriggerSourceConversation       commentAgentTriggerSource = "conversation_continuation"
 )
 
 const defaultCommentRoutingEscalationDelay = 5 * time.Minute
@@ -1052,6 +1053,8 @@ func commentAgentTriggerReason(trigger commentAgentTrigger) string {
 		return "A mentioned squad will trigger its leader."
 	case commentTriggerSourceThreadParent:
 		return "This reply will trigger the parent comment's author."
+	case commentTriggerSourceConversation:
+		return "This follow-up will continue the recent agent conversation."
 	default:
 		return "This comment will trigger this agent."
 	}
@@ -1326,7 +1329,9 @@ func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, co
 	if isNoteComment(comment.Content) {
 		return
 	}
-	triggers := h.computeCommentAgentTriggers(ctx, issue, comment.Content, parentComment, actorType, actorID, commentTriggerComputeOptions{})
+	triggers := h.computeCommentAgentTriggers(ctx, issue, comment.Content, parentComment, actorType, actorID, commentTriggerComputeOptions{
+		ExcludeTriggerCommentID: comment.ID,
+	})
 	triggers = filterSuppressedCommentAgentTriggers(triggers, suppressAgentIDs)
 	h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers)
 }
@@ -1394,12 +1399,19 @@ func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issu
 					"agent_id", uuidToString(trigger.Agent.ID),
 					"error", err)
 			}
-		case commentTriggerSourceThreadParent:
-			task, err := h.TaskService.EnqueueTaskForThreadParent(ctx, issue, trigger.Agent.ID, triggerCommentID)
+		case commentTriggerSourceThreadParent, commentTriggerSourceConversation:
+			var task db.AgentTaskQueue
+			var err error
+			if trigger.Source == commentTriggerSourceConversation && trigger.Squad != nil {
+				task, err = h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, trigger.Agent.ID, trigger.Squad.ID, triggerCommentID)
+			} else {
+				task, err = h.TaskService.EnqueueTaskForThreadParent(ctx, issue, trigger.Agent.ID, triggerCommentID)
+			}
 			if err != nil {
-				slog.Warn("enqueue thread-parent agent task failed",
+				slog.Warn("enqueue routed comment agent task failed",
 					"issue_id", uuidToString(issue.ID),
 					"agent_id", uuidToString(trigger.Agent.ID),
+					"source", trigger.Source,
 					"error", err)
 				continue
 			}
@@ -1457,6 +1469,23 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 		return []commentAgentTrigger{trigger}
 	}
 
+	if parentComment == nil {
+		trigger, handled, ok := h.routeConversationContinuation(ctx, issue, actorID, opts)
+		if handled {
+			if !ok {
+				return nil
+			}
+			if fallback, ok := h.routeAssigneeFallback(ctx, issue, actorType, actorID, opts); ok &&
+				uuidToString(fallback.Agent.ID) != uuidToString(trigger.Agent.ID) {
+				trigger.EscalationFallback = &commentEscalationFallback{
+					Agent: fallback.Agent,
+					Squad: fallback.Squad,
+				}
+			}
+			return []commentAgentTrigger{trigger}
+		}
+	}
+
 	if trigger, ok := h.routeAssigneeFallback(ctx, issue, actorType, actorID, opts); ok {
 		return []commentAgentTrigger{trigger}
 	}
@@ -1500,6 +1529,156 @@ func (h *Handler) routeReplyToParentAuthor(ctx context.Context, issue db.Issue, 
 		return commentAgentTrigger{}, false
 	}
 	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceThreadParent}, true
+}
+
+func (h *Handler) routeConversationContinuation(ctx context.Context, issue db.Issue, memberID string, opts commentTriggerComputeOptions) (commentAgentTrigger, bool, bool) {
+	comments, err := h.Queries.ListCommentsForIssue(ctx, db.ListCommentsForIssueParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+		Limit:       commentHardCap,
+	})
+	if err != nil {
+		return commentAgentTrigger{}, false, false
+	}
+	tasks, err := h.Queries.ListTasksByIssue(ctx, issue.ID)
+	if err != nil {
+		return commentAgentTrigger{}, false, false
+	}
+
+	excludedID := uuidToString(opts.ExcludeTriggerCommentID)
+	type routedAgentInfo struct {
+		SquadID pgtype.UUID
+		Active  bool
+	}
+	routedByRoot := make(map[string]map[string]routedAgentInfo)
+	for _, task := range tasks {
+		if !task.TriggerCommentID.Valid || !task.AgentID.Valid {
+			continue
+		}
+		rootID := uuidToString(task.TriggerCommentID)
+		if excludedID != "" && rootID == excludedID {
+			continue
+		}
+		agentID := uuidToString(task.AgentID)
+		if _, ok := routedByRoot[rootID]; !ok {
+			routedByRoot[rootID] = make(map[string]routedAgentInfo)
+		}
+		info := routedByRoot[rootID][agentID]
+		if !info.SquadID.Valid {
+			info.SquadID = task.SquadID
+		}
+		info.Active = info.Active || isActiveConversationTaskStatus(task.Status)
+		routedByRoot[rootID][agentID] = info
+	}
+	if len(routedByRoot) == 0 {
+		return commentAgentTrigger{}, false, false
+	}
+
+	rootByComment := make(map[string]string, len(comments))
+	latestReplyByRoot := make(map[string]db.Comment)
+	for _, comment := range comments {
+		commentID := uuidToString(comment.ID)
+		if excludedID != "" && commentID == excludedID {
+			continue
+		}
+
+		rootID := commentID
+		if comment.ParentID.Valid {
+			parentRoot, ok := rootByComment[uuidToString(comment.ParentID)]
+			if !ok {
+				continue
+			}
+			rootID = parentRoot
+		}
+		rootByComment[commentID] = rootID
+
+		if comment.AuthorType != "agent" || !comment.ParentID.Valid || !comment.AuthorID.Valid {
+			continue
+		}
+		if routedAgents, ok := routedByRoot[rootID]; ok {
+			if _, routed := routedAgents[uuidToString(comment.AuthorID)]; routed {
+				latestReplyByRoot[rootID] = comment
+			}
+		}
+	}
+
+	for i := len(comments) - 1; i >= 0; i-- {
+		root := comments[i]
+		rootID := uuidToString(root.ID)
+		if excludedID != "" && rootID == excludedID {
+			continue
+		}
+		if root.ParentID.Valid || root.AuthorType != "member" || uuidToString(root.AuthorID) != memberID {
+			continue
+		}
+
+		routedAgents, ok := routedByRoot[rootID]
+		if !ok || len(routedAgents) == 0 {
+			return commentAgentTrigger{}, false, false
+		}
+
+		if reply, ok := latestReplyByRoot[rootID]; ok {
+			trigger, ok := h.routeConversationContinuationToAgent(ctx, issue, reply.AuthorID, routedAgents[uuidToString(reply.AuthorID)].SquadID, memberID, opts)
+			return trigger, true, ok
+		}
+
+		if len(routedAgents) == 1 {
+			for agentID, info := range routedAgents {
+				if !info.Active {
+					return commentAgentTrigger{}, false, false
+				}
+				trigger, ok := h.routeConversationContinuationToAgent(ctx, issue, parseUUID(agentID), info.SquadID, memberID, opts)
+				return trigger, true, ok
+			}
+		}
+		for _, info := range routedAgents {
+			if info.Active {
+				return commentAgentTrigger{}, true, false
+			}
+		}
+		return commentAgentTrigger{}, false, false
+	}
+
+	return commentAgentTrigger{}, false, false
+}
+
+func isActiveConversationTaskStatus(status string) bool {
+	switch status {
+	case "queued", "dispatched", "running", "waiting_local_directory", "deferred":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) routeConversationContinuationToAgent(ctx context.Context, issue db.Issue, agentID, squadID pgtype.UUID, memberID string, opts commentTriggerComputeOptions) (commentAgentTrigger, bool) {
+	if !agentID.Valid {
+		return commentAgentTrigger{}, false
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          agentID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		return commentAgentTrigger{}, false
+	}
+	if !h.canAccessPrivateAgent(ctx, agent, "member", memberID, uuidToString(issue.WorkspaceID)) {
+		return commentAgentTrigger{}, false
+	}
+	hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, agentID, opts)
+	if err != nil || hasPending {
+		return commentAgentTrigger{}, false
+	}
+	trigger := commentAgentTrigger{Agent: agent, Source: commentTriggerSourceConversation}
+	if squadID.Valid {
+		if squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+			ID:          squadID,
+			WorkspaceID: issue.WorkspaceID,
+		}); err == nil {
+			trigger.Squad = &squad
+		}
+	}
+	return trigger, true
 }
 
 func (h *Handler) routeAssigneeFallback(ctx context.Context, issue db.Issue, authorType, authorID string, opts commentTriggerComputeOptions) (commentAgentTrigger, bool) {
