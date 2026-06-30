@@ -2,6 +2,7 @@
 
 import { LarkTab } from "./lark-tab";
 import { SlackTab } from "./slack-tab";
+import { JiraTab } from "./jira-tab";
 import { useT } from "../../i18n";
 
 // Integrations is the umbrella tab for third-party platform connections.
@@ -21,6 +22,11 @@ export function IntegrationsTab() {
       <section className="space-y-4">
         <h2 className="text-sm font-semibold">{t(($) => $.slack.section_title)}</h2>
         <SlackTab />
+      </section>
+      <section className="space-y-4">
+        {/* TODO(i18n): add a settings.jira.section_title glossary key. */}
+        <h2 className="text-sm font-semibold">Jira</h2>
+        <JiraTab />
       </section>
     </div>
   );
