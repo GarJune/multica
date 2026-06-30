@@ -20,6 +20,7 @@ import { projectListOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
 import { PriorityPicker, AssigneePicker, StartDatePicker, DueDatePicker } from "./pickers";
+import { JiraBadge } from "./jira-badge";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { ProgressRing } from "./progress-ring";
 import type { ChildProgress } from "./list-row";
@@ -193,6 +194,7 @@ export const BoardCardContent = memo(function BoardCardContent({
       <p className="mt-1 text-sm font-medium leading-snug line-clamp-2">
         {issue.title}
       </p>
+      <JiraBadge issue={issue} />
 
       {showDescription && (() => {
         const preview = descriptionPreview(issue.description!);
