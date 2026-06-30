@@ -6,7 +6,7 @@ import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { useJiraSync } from "../jira/use-jira-sync";
+import { getJiraBridge, useJiraSync } from "../jira/use-jira-sync";
 
 interface JiraFormState {
   siteUrl: string;
@@ -30,15 +30,16 @@ const EMPTY_FORM: JiraFormState = {
  *  in the Electron main process (via window.jiraAPI) to bypass browser CORS, so
  *  on web we render a notice instead of the form. */
 export function JiraTab() {
-  const isDesktop = typeof window !== "undefined" && !!window.jiraAPI;
+  const isDesktop = !!getJiraBridge();
   const { syncNow, running, lastResult, error } = useJiraSync();
   const [form, setForm] = useState<JiraFormState>(EMPTY_FORM);
   const [hasToken, setHasToken] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isDesktop) return;
-    void window.jiraAPI.getConfig().then((cfg) => {
+    const bridge = getJiraBridge();
+    if (!bridge) return;
+    void bridge.getConfig().then((cfg) => {
       setForm({
         siteUrl: cfg.siteUrl,
         email: cfg.email,
@@ -62,6 +63,8 @@ export function JiraTab() {
   }
 
   const onSave = async () => {
+    const bridge = getJiraBridge();
+    if (!bridge) return;
     setSaveMessage(null);
     let statusMapping: Record<string, string>;
     try {
@@ -70,7 +73,7 @@ export function JiraTab() {
       setSaveMessage("Status mapping must be valid JSON.");
       return;
     }
-    await window.jiraAPI.setConfig({
+    await bridge.setConfig({
       siteUrl: form.siteUrl.trim(),
       email: form.email.trim(),
       // Empty token means "leave the stored token unchanged" (see main process).

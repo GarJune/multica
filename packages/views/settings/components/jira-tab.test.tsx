@@ -10,6 +10,8 @@ vi.mock("../jira/use-jira-sync", () => ({
     lastResult: { created: 3, updated: 1, skipped: 0, commentsAdded: 2, errors: [] },
     error: null,
   }),
+  getJiraBridge: () =>
+    (globalThis as unknown as { window: { jiraAPI?: unknown } }).window.jiraAPI,
 }));
 
 import { JiraTab } from "./jira-tab";

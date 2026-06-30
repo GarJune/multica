@@ -8,6 +8,37 @@ import {
   type SyncResult,
 } from "@multica/core/jira";
 
+/** Non-secret Jira config the desktop main process returns to the renderer.
+ *  `apiToken` is always "" when read back; `hasToken` reflects whether one is
+ *  stored. Declared here (not imported from the desktop package) because views
+ *  must stay platform-agnostic. */
+export interface JiraDesktopConfig {
+  siteUrl: string;
+  email: string;
+  apiToken: string;
+  hasToken: boolean;
+  jql: string;
+  statusMapping: Record<string, string>;
+  pollIntervalMinutes: number;
+}
+
+/** Bridge exposed by the Electron preload on desktop; undefined on web. */
+export interface JiraDesktopBridge {
+  request: (req: { method: string; path: string; body?: unknown }) => Promise<unknown>;
+  getConfig: () => Promise<JiraDesktopConfig>;
+  setConfig: (patch: Partial<JiraDesktopConfig>) => Promise<JiraDesktopConfig>;
+  onPollTick: (callback: () => void) => () => void;
+}
+
+/** Read the desktop Jira bridge without augmenting the global `Window` type —
+ *  views stays platform-agnostic and avoids colliding with the desktop app's
+ *  own `Window.jiraAPI` declaration when both are compiled together. Returns
+ *  undefined on web (and in tests where it isn't installed). */
+export function getJiraBridge(): JiraDesktopBridge | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as unknown as { jiraAPI?: JiraDesktopBridge }).jiraAPI;
+}
+
 /** Drives a user-triggered Jira → Multica sync from the desktop renderer. Reads
  *  the main-process Jira config + transport via `window.jiraAPI`, resolves the
  *  current member from the auth store, and runs the core sync engine against
@@ -19,7 +50,8 @@ export function useJiraSync() {
   const [error, setError] = useState<string | null>(null);
 
   const syncNow = useCallback(async (): Promise<SyncResult | null> => {
-    if (typeof window === "undefined" || !window.jiraAPI) {
+    const bridge = getJiraBridge();
+    if (!bridge) {
       setError("Jira sync is only available in the desktop app.");
       return null;
     }
@@ -30,8 +62,8 @@ export function useJiraSync() {
     setRunning(true);
     setError(null);
     try {
-      const cfg = await window.jiraAPI.getConfig();
-      const transport: JiraTransport = (req) => window.jiraAPI.request(req);
+      const cfg = await bridge.getConfig();
+      const transport: JiraTransport = (req) => bridge.request(req);
       const config: JiraConfig = {
         siteUrl: cfg.siteUrl,
         email: cfg.email,
