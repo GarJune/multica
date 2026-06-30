@@ -681,4 +681,38 @@ describe("ApiClient", () => {
       expect(JSON.parse(fetchMock.mock.calls[1]![1]?.body as string)).toEqual({ content: "again" });
     });
   });
+
+  describe("issue metadata", () => {
+    it("PUTs a single metadata key", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ metadata: { jira_key: "PROJ-1" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      await client.setIssueMetadata("issue-1", "jira_key", "PROJ-1");
+
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(String(url)).toContain("/api/issues/issue-1/metadata/jira_key");
+      expect(init?.method).toBe("PUT");
+      expect(JSON.parse(init?.body as string)).toEqual({ value: "PROJ-1" });
+    });
+
+    it("GETs the metadata map", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ metadata: { jira_key: "PROJ-1" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const md = await client.getIssueMetadata("issue-1");
+      expect(md.jira_key).toBe("PROJ-1");
+    });
+  });
 });

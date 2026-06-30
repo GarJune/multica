@@ -670,6 +670,23 @@ export class ApiClient {
     });
   }
 
+  async getIssueMetadata(issueId: string): Promise<Record<string, string | number | boolean>> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/metadata`);
+    const md = (raw as { metadata?: Record<string, string | number | boolean> })?.metadata;
+    return md && typeof md === "object" ? md : {};
+  }
+
+  async setIssueMetadata(
+    issueId: string,
+    key: string,
+    value: string | number | boolean,
+  ): Promise<void> {
+    await this.fetch(`/api/issues/${issueId}/metadata/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    });
+  }
+
   // Comments
   async listComments(issueId: string): Promise<Comment[]> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/comments`);
