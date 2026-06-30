@@ -153,12 +153,33 @@ interface UpdaterAPI {
   >;
 }
 
+/** Non-secret Jira config view returned to the renderer. `apiToken` is always
+ *  "" when read back; a non-empty value is only sent when writing. `hasToken`
+ *  reflects whether a token is stored. */
+export interface JiraRendererConfig {
+  siteUrl: string;
+  email: string;
+  apiToken: string;
+  hasToken: boolean;
+  jql: string;
+  statusMapping: Record<string, string>;
+  pollIntervalMinutes: number;
+}
+
+interface JiraAPI {
+  request: (req: { method: string; path: string; body?: unknown }) => Promise<unknown>;
+  getConfig: () => Promise<JiraRendererConfig>;
+  setConfig: (patch: Partial<JiraRendererConfig>) => Promise<JiraRendererConfig>;
+  onPollTick: (callback: () => void) => () => void;
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI;
     desktopAPI: DesktopAPI;
     daemonAPI: DaemonAPI;
     updater: UpdaterAPI;
+    jiraAPI: JiraAPI;
   }
 }
 

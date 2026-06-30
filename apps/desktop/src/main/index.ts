@@ -12,6 +12,7 @@ import { handleAppShortcut } from "./keyboard-shortcuts";
 import { installNavigationGestures } from "./navigation-gestures";
 import { getAppVersion } from "./app-version";
 import { loadRuntimeConfig } from "./runtime-config-loader";
+import { registerJiraHandlers, startJiraPolling } from "./jira";
 import type { RuntimeConfigResult } from "../shared/runtime-config";
 import {
   RENDERER_ROUTE_CONTEXT_CHANNEL,
@@ -429,6 +430,12 @@ if (!gotTheLock) {
       }
       downloadURLSafely(mainWindow, url);
     });
+
+    // IPC: Jira sync — main-process REST bridge (bypasses renderer CORS) and
+    // config store. Polling signals the renderer to run a sync, which owns the
+    // workspace ApiClient.
+    registerJiraHandlers();
+    void startJiraPolling(() => mainWindow?.webContents ?? null);
 
     // Sync IPC: app version + normalized OS for preload. Sync (not invoke) so
     // preload can attach the values to `desktopAPI.appInfo` before any renderer

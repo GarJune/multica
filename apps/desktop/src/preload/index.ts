@@ -293,11 +293,24 @@ const updaterAPI = {
   > => ipcRenderer.invoke("updater:check"),
 };
 
+const jiraAPI = {
+  request: (req: { method: string; path: string; body?: unknown }) =>
+    ipcRenderer.invoke("jira:request", req) as Promise<unknown>,
+  getConfig: () => ipcRenderer.invoke("jira:get-config"),
+  setConfig: (patch: Record<string, unknown>) => ipcRenderer.invoke("jira:set-config", patch),
+  onPollTick: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("jira:poll-tick", handler);
+    return () => ipcRenderer.removeListener("jira:poll-tick", handler);
+  },
+};
+
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("electron", electronAPI);
   contextBridge.exposeInMainWorld("desktopAPI", desktopAPI);
   contextBridge.exposeInMainWorld("daemonAPI", daemonAPI);
   contextBridge.exposeInMainWorld("updater", updaterAPI);
+  contextBridge.exposeInMainWorld("jiraAPI", jiraAPI);
 } else {
   // @ts-expect-error - fallback for non-isolated context
   window.electron = electronAPI;
@@ -307,4 +320,6 @@ if (process.contextIsolated) {
   window.daemonAPI = daemonAPI;
   // @ts-expect-error - fallback for non-isolated context
   window.updater = updaterAPI;
+  // @ts-expect-error - fallback for non-isolated context
+  window.jiraAPI = jiraAPI;
 }
