@@ -503,3 +503,148 @@ func TestAntigravityModelError(t *testing.T) {
 		t.Error("near-miss model (dropped suffix) should be rejected")
 	}
 }
+
+// seedAntigravityTranscript writes a transcript.jsonl under appDataDir for the
+// given conversation id, at the real path agy uses
+// (<appDataDir>/brain/<cid>/.system_generated/logs/transcript.jsonl).
+func seedAntigravityTranscript(t *testing.T, appDataDir, conversationID string, records []string) {
+	t.Helper()
+	dir := filepath.Join(appDataDir, "brain", conversationID, ".system_generated", "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Join(records, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "transcript.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadAntigravityTranscriptOutput(t *testing.T) {
+	t.Parallel()
+
+	appDataDir := t.TempDir()
+	cid := "d1637a93-20c7-4d90-8edb-7395e71280d2"
+
+	// The app data dir + conversation id both come from the per-run log, the
+	// same source the daemon already owns via --log-file.
+	logPath := filepath.Join(t.TempDir(), "agy.log")
+	if err := os.WriteFile(logPath, []byte(strings.Join([]string{
+		`I0630 14:19:40.582492 1 common.go:156] CLI app data directory: ` + appDataDir,
+		`I0630 14:19:46.755801 1 printmode.go:179] Print mode: conversation=` + cid + `, sending message`,
+	}, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	seedAntigravityTranscript(t, appDataDir, cid, []string{
+		// User input and non-MODEL planner text must be excluded.
+		`{"type":"USER_INPUT","source":"USER","status":"DONE","step_index":0,"content":"the user's prompt — must be ignored"}`,
+		// Tool-only model steps carry content=null and must be skipped.
+		`{"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","step_index":2,"content":null}`,
+		`{"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","step_index":3,"content":"First I will read the file."}`,
+		`{"type":"VIEW_FILE","status":"DONE","step_index":4}`,
+		`{"type":"PLANNER_RESPONSE","source":"SYSTEM","status":"DONE","step_index":5,"content":"non-model planner text — must be ignored"}`,
+		`{"type":"CODE_ACTION","status":"DONE","step_index":6}`,
+		`{"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","step_index":7,"content":"Done: created result.txt and verified it."}`,
+	})
+
+	// MODEL text is joined in order; null/tool/non-model records are dropped.
+	got := readAntigravityTranscriptOutput(logPath, cid)
+	want := "First I will read the file.\n\nDone: created result.txt and verified it."
+	if got != want {
+		t.Fatalf("readAntigravityTranscriptOutput mismatch\n got: %q\nwant: %q", got, want)
+	}
+
+	// Every soft-failure path must yield "" rather than erroring.
+	if got := readAntigravityTranscriptOutput(logPath, "ffffffff-0000-0000-0000-000000000000"); got != "" {
+		t.Errorf("unknown conversation id should yield empty, got %q", got)
+	}
+	if got := readAntigravityTranscriptOutput("/nonexistent/agy.log", cid); got != "" {
+		t.Errorf("missing log (no app data dir) should yield empty, got %q", got)
+	}
+	if got := readAntigravityTranscriptOutput(logPath, ""); got != "" {
+		t.Errorf("empty conversation id should yield empty, got %q", got)
+	}
+	if got := readAntigravityTranscriptOutput("", cid); got != "" {
+		t.Errorf("empty log path should yield empty, got %q", got)
+	}
+}
+
+// fakeAgyEmptyStdoutScript reproduces agy 1.0.14's regressed print mode: the
+// process logs its CLI app data directory and the conversation id, writes
+// NOTHING to stdout, and exits 0 — the "PlannerResponse without ModifiedResponse"
+// case (MUL-3726). The real reply lives only in the conversation transcript,
+// which the test seeds under appDataDir.
+func fakeAgyEmptyStdoutScript(appDataDir, conversationID string) string {
+	return `#!/bin/sh
+log=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --log-file) log="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -n "$log" ]; then
+  printf 'I0630 14:19:40.582492 1 common.go:156] CLI app data directory: ` + appDataDir + `\n' >> "$log"
+  printf 'I0630 14:19:46.755801 1 printmode.go:179] Print mode: conversation=` + conversationID + `, sending message\n' >> "$log"
+fi
+exit 0
+`
+}
+
+// TestAntigravityBackendRecoversEmptyStdoutFromTranscript is the end-to-end
+// guard for MUL-3726: agy 1.0.14 can complete a turn with empty stdout while the
+// real reply lives only in the conversation transcript. The backend must recover
+// that text into Result.Output instead of returning a blank "completed" run.
+func TestAntigravityBackendRecoversEmptyStdoutFromTranscript(t *testing.T) {
+	t.Parallel()
+
+	appDataDir := t.TempDir()
+	cid := "44a57718-801c-41e7-9691-3225be2b1cb8"
+	seedAntigravityTranscript(t, appDataDir, cid, []string{
+		`{"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","step_index":2,"content":null}`,
+		`{"type":"VIEW_FILE","status":"DONE","step_index":3}`,
+		`{"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","step_index":4,"content":"I read marker.txt and created result.txt with VERIFIED=yes."}`,
+	})
+
+	fakePath := filepath.Join(t.TempDir(), "agy")
+	writeTestExecutable(t, fakePath, []byte(fakeAgyEmptyStdoutScript(appDataDir, cid)))
+
+	backend, err := New("antigravity", Config{ExecutablePath: fakePath, Logger: quietAntigravityLogger()})
+	if err != nil {
+		t.Fatalf("new antigravity backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "completed" {
+			t.Fatalf("expected status=completed, got %q (error=%q)", result.Status, result.Error)
+		}
+		if !strings.Contains(result.Output, "created result.txt with VERIFIED=yes") {
+			t.Fatalf("expected transcript reply recovered into output, got %q", result.Output)
+		}
+		// content=null tool steps must not leak the literal "null" into output.
+		if strings.Contains(result.Output, "null") {
+			t.Errorf("null tool-step content leaked into output: %q", result.Output)
+		}
+		if result.SessionID != cid {
+			t.Errorf("expected session id %q recovered from log, got %q", cid, result.SessionID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
