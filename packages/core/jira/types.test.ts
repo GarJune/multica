@@ -23,9 +23,9 @@ const RAW = {
 describe("parseJiraSearch", () => {
   it("parses a well-formed search response", () => {
     const res = parseJiraSearch(RAW);
-    expect(res.issues[0].key).toBe("PROJ-1");
-    expect(res.issues[0].fields.status.name).toBe("In Progress");
-    expect(res.issues[0].fields.subtasks[0].key).toBe("PROJ-2");
+    expect(res.issues[0]!.key).toBe("PROJ-1");
+    expect(res.issues[0]!.fields.status.name).toBe("In Progress");
+    expect(res.issues[0]!.fields.subtasks[0]!.key).toBe("PROJ-2");
   });
 
   it("falls back to an empty result on malformed input", () => {
@@ -38,8 +38,8 @@ describe("parseJiraSearch", () => {
       issues: [{ key: "PROJ-3", fields: { summary: "x", status: { name: "Done" } } }],
       total: 1,
     });
-    expect(res.issues[0].fields.priority).toBeNull();
-    expect(res.issues[0].fields.subtasks).toEqual([]);
-    expect(res.issues[0].fields.comment.comments).toEqual([]);
+    expect(res.issues[0]!.fields.priority).toBeNull();
+    expect(res.issues[0]!.fields.subtasks).toEqual([]);
+    expect(res.issues[0]!.fields.comment.comments).toEqual([]);
   });
 });
