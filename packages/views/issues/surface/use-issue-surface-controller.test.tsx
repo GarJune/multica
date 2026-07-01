@@ -129,6 +129,107 @@ describe("useIssueSurfaceController", () => {
     );
   });
 
+  it("uses the workspace issue list query for workspace scope", async () => {
+    const { result } = renderHook(
+      () =>
+        useIssueSurfaceController({
+          scope: { type: "workspace", actorKind: "all" },
+          modes: ["board", "list", "swimlane"],
+        }),
+      { wrapper: makeWrapper(qc, "workspace:all") },
+    );
+
+    await waitFor(() => expect(listIssues).toHaveBeenCalled());
+
+    expect(result.current.scopeKey).toBe("workspace:all");
+    expect(result.current.filter).toEqual({});
+    expect(result.current.loadMoreScope).toBeUndefined();
+    expect(result.current.loadMoreFilter).toBeUndefined();
+    expect(
+      qc.getQueryCache().find({
+        queryKey: issueKeys.listSorted("ws-1", {
+          sort_by: "position",
+          sort_direction: undefined,
+        }),
+        exact: true,
+      }),
+    ).toBeDefined();
+    expect(listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "backlog", limit: 50, offset: 0 }),
+    );
+  });
+
+  it("maps my assigned scope to the existing personal issue query contract", async () => {
+    const { result } = renderHook(
+      () =>
+        useIssueSurfaceController({
+          scope: { type: "my", relation: "assigned", userId: "user-1" },
+          modes: ["board", "list", "swimlane"],
+        }),
+      { wrapper: makeWrapper(qc, "my:user-1:assigned") },
+    );
+
+    await waitFor(() => expect(listIssues).toHaveBeenCalled());
+
+    const expectedFilter = { assignee_id: "user-1" };
+    expect(result.current.scopeKey).toBe("my:user-1:assigned");
+    expect(result.current.filter).toEqual(expectedFilter);
+    expect(result.current.loadMoreScope).toBe("assigned");
+    expect(result.current.loadMoreFilter).toEqual(expectedFilter);
+    expect(
+      qc.getQueryCache().find({
+        queryKey: issueKeys.myListSorted(
+          "ws-1",
+          "assigned",
+          expectedFilter,
+          { sort_by: "position", sort_direction: undefined },
+        ),
+        exact: true,
+      }),
+    ).toBeDefined();
+    expect(listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ assignee_id: "user-1" }),
+    );
+  });
+
+  it("keeps actor scopes keyed by actor while using the shared list query shape", async () => {
+    const { result } = renderHook(
+      () =>
+        useIssueSurfaceController({
+          scope: {
+            type: "actor",
+            actorType: "agent",
+            actorId: "agent-1",
+            relation: "assigned",
+          },
+          modes: ["list"],
+        }),
+      { wrapper: makeWrapper(qc, "actor:agent:agent-1:assigned") },
+    );
+
+    await waitFor(() => expect(listIssues).toHaveBeenCalled());
+
+    const expectedFilter = { assignee_id: "agent-1" };
+    expect(result.current.scopeKey).toBe("actor:agent:agent-1:assigned");
+    expect(result.current.filter).toEqual(expectedFilter);
+    expect(result.current.loadMoreScope).toBe("actor:agent:agent-1:assigned");
+    expect(result.current.loadMoreFilter).toEqual(expectedFilter);
+    expect(
+      qc.getQueryCache().find({
+        queryKey: issueKeys.myListSorted(
+          "ws-1",
+          "actor:agent:agent-1:assigned",
+          expectedFilter,
+          { sort_by: "position", sort_direction: undefined },
+        ),
+        exact: true,
+      }),
+    ).toBeDefined();
+    expect(listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ assignee_id: "agent-1" }),
+    );
+  });
+
   it("delegates movement through useUpdateIssue without rewriting the mutation path", () => {
     const { result } = renderHook(
       () =>

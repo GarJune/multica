@@ -11,6 +11,7 @@ import type {
 } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { BOARD_STATUSES } from "@multica/core/issues/config";
+import { dateOnlyToLocalDate } from "@multica/core/issues/date";
 import {
   useBatchDeleteIssues,
   useBatchUpdateIssues,
@@ -18,6 +19,8 @@ import {
 } from "@multica/core/issues/mutations";
 import {
   childIssueProgressOptions,
+  issueAssigneeGroupsOptions,
+  issueListOptions,
   myIssueAssigneeGroupsOptions,
   myIssueListOptions,
   projectGanttIssuesOptions,
@@ -27,10 +30,11 @@ import {
 } from "@multica/core/issues/queries";
 import {
   issueScopeKey,
-  issueScopeToApiParams,
   issueScopeToCreateDefaults,
   type IssueScope,
+  type WorkspaceIssueActorKind,
 } from "@multica/core/issues/surface/scope";
+import type { IssueDateFilter } from "@multica/core/issues/stores/view-store";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { useModalStore } from "@multica/core/modals";
 import {
@@ -68,12 +72,35 @@ interface UseIssueSurfaceControllerInput {
   createDefaults?: Partial<CreateIssueRequest>;
 }
 
+type SurfaceQueryPlan =
+  | {
+      kind: "workspace";
+      queryScope: undefined;
+      queryFilter: MyIssuesFilter;
+      groupedScopeFilter: AssigneeGroupedIssuesFilter;
+      loadMoreScope: undefined;
+      loadMoreFilter: undefined;
+      userId: undefined;
+      postFilter: (issue: Issue) => boolean;
+    }
+  | {
+      kind: "scoped";
+      queryScope: string;
+      queryFilter: MyIssuesFilter;
+      groupedScopeFilter: AssigneeGroupedIssuesFilter;
+      loadMoreScope: string;
+      loadMoreFilter: MyIssuesFilter;
+      userId?: string;
+      postFilter: (issue: Issue) => boolean;
+    };
+
 export interface IssueSurfaceController {
   scopeKey: string;
   projectId?: string;
   createDefaults: Partial<CreateIssueRequest>;
   viewMode: IssueSurfaceMode;
   allowGantt: boolean;
+  surfaceIssues: Issue[];
   projectIssues: Issue[];
   issues: Issue[];
   swimlaneIssues: Issue[];
@@ -82,6 +109,8 @@ export interface IssueSurfaceController {
   assigneeGroupQueryKey?: QueryKey;
   assigneeGroupFilter?: AssigneeGroupedIssuesFilter;
   filter: MyIssuesFilter;
+  loadMoreScope?: string;
+  loadMoreFilter?: MyIssuesFilter;
   sort: IssueSortParam;
   ganttIssues: Issue[];
   visibleStatuses: typeof BOARD_STATUSES;
@@ -91,8 +120,9 @@ export interface IssueSurfaceController {
   actions: IssueSurfaceActions;
   selection: IssueSurfaceSelection;
   childProgressMap: Map<string, ChildProgress>;
+  isLoading: boolean;
   isEmpty: boolean;
-  openCreateIssue: () => void;
+  openCreateIssue: (defaults?: Partial<CreateIssueRequest>) => void;
   moveIssue: (
     issueId: string,
     updates: MoveIssueUpdates,
@@ -100,12 +130,137 @@ export interface IssueSurfaceController {
   ) => void;
 }
 
-function projectFilterFromScope(scope: IssueScope): MyIssuesFilter {
-  if (scope.type !== "project") {
-    throw new Error("IssueSurface currently supports project scope only.");
+function issueDateFilterToApiParams(filter: IssueDateFilter | null) {
+  if (!filter) return {};
+
+  const from = dateOnlyToLocalDate(filter.from);
+  const to = dateOnlyToLocalDate(filter.to);
+  if (!from || !to) return {};
+
+  const start = from <= to ? from : to;
+  const endSource = from <= to ? to : from;
+  const end = new Date(endSource);
+  end.setDate(end.getDate() + 1);
+
+  return {
+    date_field: filter.field,
+    date_start: start.toISOString(),
+    date_end: end.toISOString(),
+  };
+}
+
+function workspaceActorPostFilter(actorKind?: WorkspaceIssueActorKind) {
+  return (issue: Issue) => {
+    if (actorKind === "members") return issue.assignee_type === "member";
+    if (actorKind === "agents") {
+      return issue.assignee_type === "agent" || issue.assignee_type === "squad";
+    }
+    return true;
+  };
+}
+
+function workspaceGroupedFilter(actorKind?: WorkspaceIssueActorKind) {
+  if (actorKind === "members") {
+    return { assignee_types: ["member"] } satisfies AssigneeGroupedIssuesFilter;
   }
-  const params = issueScopeToApiParams(scope);
-  return { project_id: params.project_id };
+  if (actorKind === "agents") {
+    return {
+      assignee_types: ["agent", "squad"],
+    } satisfies AssigneeGroupedIssuesFilter;
+  }
+  return {} satisfies AssigneeGroupedIssuesFilter;
+}
+
+function myRelationQuery(scope: Extract<IssueScope, { type: "my" }>) {
+  switch (scope.relation) {
+    case "assigned":
+      return {
+        queryScope: "assigned",
+        queryFilter: { assignee_id: scope.userId },
+        userId: undefined,
+      } satisfies Pick<SurfaceQueryPlan & { kind: "scoped" }, "queryScope" | "queryFilter" | "userId">;
+    case "created":
+      return {
+        queryScope: "created",
+        queryFilter: { creator_id: scope.userId },
+        userId: undefined,
+      } satisfies Pick<SurfaceQueryPlan & { kind: "scoped" }, "queryScope" | "queryFilter" | "userId">;
+    case "involved":
+      return {
+        queryScope: "agents",
+        queryFilter: { involves_user_id: scope.userId },
+        userId: undefined,
+      } satisfies Pick<SurfaceQueryPlan & { kind: "scoped" }, "queryScope" | "queryFilter" | "userId">;
+    case "all":
+      return {
+        queryScope: "all",
+        queryFilter: {},
+        userId: scope.userId,
+      } satisfies Pick<SurfaceQueryPlan & { kind: "scoped" }, "queryScope" | "queryFilter" | "userId">;
+  }
+}
+
+function queryPlanForScope(scope: IssueScope, scopeKey: string): SurfaceQueryPlan {
+  switch (scope.type) {
+    case "workspace":
+      return {
+        kind: "workspace",
+        queryScope: undefined,
+        queryFilter: {},
+        groupedScopeFilter: workspaceGroupedFilter(scope.actorKind),
+        loadMoreScope: undefined,
+        loadMoreFilter: undefined,
+        userId: undefined,
+        postFilter: workspaceActorPostFilter(scope.actorKind),
+      };
+    case "project": {
+      const queryFilter = { project_id: scope.projectId };
+      return {
+        kind: "scoped",
+        queryScope: scopeKey,
+        queryFilter,
+        groupedScopeFilter: queryFilter,
+        loadMoreScope: scopeKey,
+        loadMoreFilter: queryFilter,
+        userId: undefined,
+        postFilter: () => true,
+      };
+    }
+    case "my": {
+      const query = myRelationQuery(scope);
+      return {
+        kind: "scoped",
+        ...query,
+        groupedScopeFilter: query.queryFilter,
+        loadMoreScope: query.queryScope,
+        loadMoreFilter: query.queryFilter,
+        postFilter: () => true,
+      };
+    }
+    case "actor": {
+      const queryFilter =
+        scope.relation === "assigned"
+          ? { assignee_id: scope.actorId }
+          : { creator_id: scope.actorId };
+      return {
+        kind: "scoped",
+        queryScope: scopeKey,
+        queryFilter,
+        groupedScopeFilter: queryFilter,
+        loadMoreScope: scopeKey,
+        loadMoreFilter: queryFilter,
+        userId: undefined,
+        postFilter: (issue) =>
+          scope.relation === "assigned"
+            ? issue.assignee_type === scope.actorType &&
+              issue.assignee_id === scope.actorId
+            : issue.creator_type === scope.actorType &&
+              issue.creator_id === scope.actorId,
+      };
+    }
+    case "team":
+      throw new Error("IssueSurface does not support team scope without a Team issues API.");
+  }
 }
 
 export function useIssueSurfaceController({
@@ -117,20 +272,21 @@ export function useIssueSurfaceController({
   const wsId = useWorkspaceId();
   const scopeKey = issueScopeKey(scope);
   const projectId = scope.type === "project" ? scope.projectId : undefined;
-  if (!projectId) {
-    throw new Error("IssueSurface currently supports project scope only.");
-  }
+  const queryPlan = useMemo(() => queryPlanForScope(scope, scopeKey), [scope, scopeKey]);
 
   const viewMode = useViewStore((s) => s.viewMode);
   const setViewMode = useViewStore((s) => s.setViewMode);
   const grouping = useViewStore((s) => s.grouping);
   const sortBy = useViewStore((s) => s.sortBy);
   const sortDirection = useViewStore((s) => s.sortDirection);
+  const dateFilter = useViewStore((s) => s.dateFilter);
   const statusFilters = useViewStore((s) => s.statusFilters);
   const priorityFilters = useViewStore((s) => s.priorityFilters);
   const assigneeFilters = useViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useViewStore((s) => s.creatorFilters);
+  const projectFilters = useViewStore((s) => s.projectFilters);
+  const includeNoProject = useViewStore((s) => s.includeNoProject);
   const labelFilters = useViewStore((s) => s.labelFilters);
   const agentRunningFilter = useViewStore((s) => s.agentRunningFilter);
 
@@ -146,18 +302,22 @@ export function useIssueSurfaceController({
     }
   }, [allowedModes, fallbackMode, setViewMode, viewMode]);
 
-  const filter = useMemo(() => projectFilterFromScope(scope), [scope]);
   const resolvedCreateDefaults = useMemo(
     () => ({ ...issueScopeToCreateDefaults(scope), ...createDefaults }),
     [createDefaults, scope],
   );
 
+  const dateParams = useMemo(
+    () => issueDateFilterToApiParams(dateFilter),
+    [dateFilter],
+  );
   const sort = useMemo<IssueSortParam>(
     () => ({
       sort_by: sortBy,
       sort_direction: sortBy !== "position" ? sortDirection : undefined,
+      ...dateParams,
     }),
-    [sortBy, sortDirection],
+    [dateParams, sortBy, sortDirection],
   );
 
   const activity = useIssueSurfaceActivity(scope);
@@ -169,53 +329,100 @@ export function useIssueSurfaceController({
 
   const usesAssigneeBoard =
     effectiveViewMode === "board" && grouping === "assignee";
-  const usesGantt = effectiveViewMode === "gantt";
+  const usesGantt = effectiveViewMode === "gantt" && !!projectId;
+
+  const projectFilterState = useMemo(
+    () => ({
+      projectFilters: scope.type === "project" ? [] : projectFilters,
+      includeNoProject: scope.type === "project" ? false : includeNoProject,
+    }),
+    [includeNoProject, projectFilters, scope.type],
+  );
+  const { projectFilters: viewProjectFilters, includeNoProject: viewIncludeNoProject } =
+    projectFilterState;
 
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(
     () => ({
-      ...filter,
+      ...queryPlan.groupedScopeFilter,
       statuses: statusFilters.length > 0 ? statusFilters : [...BOARD_STATUSES],
       priorities: priorityFilters,
       assignee_filters: assigneeFilters,
       include_no_assignee: includeNoAssignee,
       creator_filters: creatorFilters,
+      project_ids: viewProjectFilters,
+      include_no_project: viewIncludeNoProject,
       label_ids: labelFilters,
     }),
     [
       assigneeFilters,
       creatorFilters,
-      filter,
       includeNoAssignee,
       labelFilters,
       priorityFilters,
+      queryPlan.groupedScopeFilter,
       statusFilters,
+      viewIncludeNoProject,
+      viewProjectFilters,
     ],
   );
-  const assigneeGroupsOptions = myIssueAssigneeGroupsOptions(
+
+  const workspaceAssigneeGroupsOptions = issueAssigneeGroupsOptions(
     wsId,
-    scopeKey,
     assigneeGroupFilter,
-    undefined,
     sort,
   );
-  const statusIssuesQuery = useQuery({
-    ...myIssueListOptions(wsId, scopeKey, filter, undefined, sort),
-    enabled: !usesAssigneeBoard && !usesGantt,
+  const scopedAssigneeGroupsOptions = myIssueAssigneeGroupsOptions(
+    wsId,
+    queryPlan.queryScope ?? scopeKey,
+    assigneeGroupFilter,
+    queryPlan.userId,
+    sort,
+  );
+  const activeAssigneeGroupsOptions =
+    queryPlan.kind === "workspace"
+      ? workspaceAssigneeGroupsOptions
+      : scopedAssigneeGroupsOptions;
+
+  const workspaceStatusIssuesQuery = useQuery({
+    ...issueListOptions(wsId, sort),
+    enabled: queryPlan.kind === "workspace" && !usesAssigneeBoard && !usesGantt,
+  });
+  const scopedStatusIssuesQuery = useQuery({
+    ...myIssueListOptions(
+      wsId,
+      queryPlan.queryScope ?? scopeKey,
+      queryPlan.queryFilter,
+      queryPlan.userId,
+      sort,
+    ),
+    enabled: queryPlan.kind === "scoped" && !usesAssigneeBoard && !usesGantt,
   });
   const assigneeGroupsQuery = useQuery({
-    ...assigneeGroupsOptions,
+    ...activeAssigneeGroupsOptions,
     enabled: usesAssigneeBoard,
   });
   const ganttIssuesQuery = useQuery({
-    ...projectGanttIssuesOptions(wsId, projectId),
+    ...projectGanttIssuesOptions(wsId, projectId ?? ""),
     enabled: usesGantt,
   });
 
-  const bucketedIssues = usesAssigneeBoard
-    ? (assigneeGroupsQuery.data?.groups.flatMap((group) => group.issues) ?? [])
-    : (statusIssuesQuery.data ?? EMPTY_ISSUES);
+  const bucketedIssues = useMemo(() => {
+    const raw = usesAssigneeBoard
+      ? (assigneeGroupsQuery.data?.groups.flatMap((group) => group.issues) ?? [])
+      : queryPlan.kind === "workspace"
+        ? (workspaceStatusIssuesQuery.data ?? EMPTY_ISSUES)
+        : (scopedStatusIssuesQuery.data ?? EMPTY_ISSUES);
+    return raw.filter(queryPlan.postFilter);
+  }, [
+    assigneeGroupsQuery.data?.groups,
+    queryPlan,
+    scopedStatusIssuesQuery.data,
+    usesAssigneeBoard,
+    workspaceStatusIssuesQuery.data,
+  ]);
+
   const ganttIssues = ganttIssuesQuery.data ?? EMPTY_ISSUES;
-  const projectIssues = usesGantt ? ganttIssues : bucketedIssues;
+  const surfaceIssues = usesGantt ? ganttIssues : bucketedIssues;
 
   const baseFilterState = useMemo<IssueFilterState>(
     () => ({
@@ -224,30 +431,27 @@ export function useIssueSurfaceController({
       assigneeFilters,
       includeNoAssignee,
       creatorFilters,
-      projectFilters: [],
-      includeNoProject: false,
+      projectFilters: viewProjectFilters,
+      includeNoProject: viewIncludeNoProject,
       labelFilters,
       workingOnly: agentRunningFilter,
     }),
     [
-      statusFilters,
-      priorityFilters,
-      assigneeFilters,
-      includeNoAssignee,
-      creatorFilters,
-      labelFilters,
       agentRunningFilter,
+      assigneeFilters,
+      creatorFilters,
+      includeNoAssignee,
+      labelFilters,
+      priorityFilters,
+      statusFilters,
+      viewIncludeNoProject,
+      viewProjectFilters,
     ],
   );
 
   const issues = useMemo(
-    () =>
-      applyIssueFilters(projectIssues, baseFilterState, filterContext),
-    [
-      projectIssues,
-      baseFilterState,
-      filterContext,
-    ],
+    () => applyIssueFilters(surfaceIssues, baseFilterState, filterContext),
+    [baseFilterState, filterContext, surfaceIssues],
   );
 
   const statuslessFilterState = useMemo<IssueFilterState>(
@@ -259,23 +463,13 @@ export function useIssueSurfaceController({
   );
 
   const swimlaneIssues = useMemo(
-    () =>
-      applyIssueFilters(projectIssues, statuslessFilterState, filterContext),
-    [
-      projectIssues,
-      statuslessFilterState,
-      filterContext,
-    ],
+    () => applyIssueFilters(surfaceIssues, statuslessFilterState, filterContext),
+    [filterContext, statuslessFilterState, surfaceIssues],
   );
 
   const filteredGanttIssues = useMemo(
-    () =>
-      applyIssueFilters(ganttIssues, baseFilterState, filterContext),
-    [
-      ganttIssues,
-      baseFilterState,
-      filterContext,
-    ],
+    () => applyIssueFilters(ganttIssues, baseFilterState, filterContext),
+    [baseFilterState, filterContext, ganttIssues],
   );
 
   const filteredAssigneeGroups = useMemo(
@@ -285,7 +479,11 @@ export function useIssueSurfaceController({
         agentRunningFilter,
         activity.runningIssueIds,
       ),
-    [assigneeGroupsQuery.data?.groups, agentRunningFilter, activity.runningIssueIds],
+    [
+      activity.runningIssueIds,
+      agentRunningFilter,
+      assigneeGroupsQuery.data?.groups,
+    ],
   );
 
   const { data: childProgressMap = new Map<string, ChildProgress>() } = useQuery(
@@ -310,18 +508,20 @@ export function useIssueSurfaceController({
       assigneeFilters,
       includeNoAssignee,
       creatorFilters,
-      projectFilters: [],
-      includeNoProject: false,
+      projectFilters: viewProjectFilters,
+      includeNoProject: viewIncludeNoProject,
       labelFilters,
       agentRunningFilter,
     }),
     [
-      priorityFilters,
-      assigneeFilters,
-      includeNoAssignee,
-      creatorFilters,
-      labelFilters,
       agentRunningFilter,
+      assigneeFilters,
+      creatorFilters,
+      includeNoAssignee,
+      labelFilters,
+      priorityFilters,
+      viewIncludeNoProject,
+      viewProjectFilters,
     ],
   );
 
@@ -343,7 +543,8 @@ export function useIssueSurfaceController({
             toast.error(
               err instanceof Error && err.message
                 ? err.message
-                : (options?.errorMessage ?? t(($) => $.detail.toast_move_issue_failed)),
+                : (options?.errorMessage ??
+                    t(($) => $.detail.toast_move_issue_failed)),
             );
             options?.onError?.(err);
           },
@@ -351,7 +552,7 @@ export function useIssueSurfaceController({
         },
       );
     },
-    [updateIssueMutation, t],
+    [t, updateIssueMutation],
   );
 
   const moveIssue = useCallback(
@@ -365,12 +566,17 @@ export function useIssueSurfaceController({
         onSettled,
       });
     },
-    [updateIssue, t],
+    [t, updateIssue],
   );
 
-  const openCreateIssue = useCallback(() => {
-    useModalStore.getState().open("create-issue", resolvedCreateDefaults);
-  }, [resolvedCreateDefaults]);
+  const openCreateIssue = useCallback(
+    (defaults?: Partial<CreateIssueRequest>) => {
+      useModalStore
+        .getState()
+        .open("create-issue", { ...resolvedCreateDefaults, ...defaults });
+    },
+    [resolvedCreateDefaults],
+  );
 
   const actions = useMemo<IssueSurfaceActions>(
     () => ({
@@ -378,11 +584,7 @@ export function useIssueSurfaceController({
         updateIssueMutation.isPending ||
         batchUpdateMutation.isPending ||
         batchDeleteMutation.isPending,
-      createIssue: (defaults) => {
-        useModalStore
-          .getState()
-          .open("create-issue", { ...resolvedCreateDefaults, ...defaults });
-      },
+      createIssue: openCreateIssue,
       updateIssue,
       moveIssue: (issueId, updates, options) =>
         updateIssue(issueId, updates, {
@@ -399,29 +601,40 @@ export function useIssueSurfaceController({
     [
       batchDeleteMutation,
       batchUpdateMutation,
-      resolvedCreateDefaults,
+      openCreateIssue,
       t,
       updateIssue,
       updateIssueMutation.isPending,
     ],
   );
 
+  const isLoading = usesAssigneeBoard
+    ? assigneeGroupsQuery.isLoading
+    : usesGantt
+      ? ganttIssuesQuery.isLoading
+      : queryPlan.kind === "workspace"
+        ? workspaceStatusIssuesQuery.isLoading
+        : scopedStatusIssuesQuery.isLoading;
+
   return {
     scopeKey,
     projectId,
     createDefaults: resolvedCreateDefaults,
     viewMode: effectiveViewMode,
-    allowGantt: allowedModes.has("gantt"),
-    projectIssues,
+    allowGantt: allowedModes.has("gantt") && !!projectId,
+    surfaceIssues,
+    projectIssues: surfaceIssues,
     issues,
     swimlaneIssues,
     filteredGanttIssues,
     assigneeGroups: usesAssigneeBoard ? filteredAssigneeGroups : undefined,
     assigneeGroupQueryKey: usesAssigneeBoard
-      ? assigneeGroupsOptions.queryKey
+      ? activeAssigneeGroupsOptions.queryKey
       : undefined,
     assigneeGroupFilter: usesAssigneeBoard ? assigneeGroupFilter : undefined,
-    filter,
+    filter: queryPlan.queryFilter,
+    loadMoreScope: queryPlan.loadMoreScope,
+    loadMoreFilter: queryPlan.loadMoreFilter,
     sort,
     ganttIssues,
     visibleStatuses,
@@ -431,10 +644,8 @@ export function useIssueSurfaceController({
     actions,
     selection,
     childProgressMap,
-    isEmpty:
-      effectiveViewMode !== "gantt" &&
-      effectiveViewMode !== "swimlane" &&
-      projectIssues.length === 0,
+    isLoading,
+    isEmpty: !isLoading && surfaceIssues.length === 0,
     openCreateIssue,
     moveIssue,
   };
