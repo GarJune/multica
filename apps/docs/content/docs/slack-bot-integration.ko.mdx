@@ -49,6 +49,7 @@ oauth_config:
       - chat:write
       - reactions:write
       - users:read
+      - commands
 settings:
   event_subscriptions:
     bot_events:
@@ -76,6 +77,7 @@ settings:
 | `im:history` + `message.im` | 봇에게 보내는 **DM**을 받습니다(모든 DM 메시지를 읽습니다). |
 | `channels:history` / `groups:history` / `mpim:history` + 대응하는 `message.*` 이벤트 | 공개 채널, 비공개 채널, 그룹 DM의 메시지를 받습니다. 이런 곳에서 봇은 자신을 **@로 멘션한** 메시지에만 반응합니다. |
 | `users:read` | Multica가 두 토큰이 같은 앱에 속하는지 (`bots.info`를 통해) 확인하는 데 필요합니다. |
+| `commands` | `/issue` 슬래시 명령을 활성화하는 bot 스코프입니다(`features.slash_commands`와 짝을 이룹니다). 이것이 없으면 매니페스트를 업데이트하고 재설치해도 명령이 부여되지 않습니다. |
 | `socket_mode_enabled: true` | 봇이 Socket Mode로 밖으로 연결합니다 — **공개 URL / request URL이 필요 없습니다**. |
 | `interactivity.is_enabled: false` | Multica의 안내는 버튼이 아니라 일반 링크라서, interactivity가 필요 없습니다. |
 | `slash_commands`(`/issue`) | `/issue` 슬래시 명령을 등록해, 누구나 메시지 입력창에서 Multica 이슈를 생성할 수 있게 합니다. Socket Mode로 전달되며 요청 URL이 필요 없습니다. |

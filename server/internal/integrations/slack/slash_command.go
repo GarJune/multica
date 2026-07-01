@@ -25,13 +25,15 @@ import (
 // slash command in the app manifest is what makes it reach us — as an
 // `EventTypeSlashCommand` over the same Socket Mode connection.
 //
-// Unlike the message path (session + dedup + debounced agent run), a slash
-// command creates no channel message and starts no chat session: it is a
-// one-shot issue creation with a PRIVATE (ephemeral) confirmation back to the
-// invoker via the command's response_url. It reuses the same installation
+// Unlike the message path (chat session + dedup + debounced chat run), a slash
+// command creates no channel message and starts no chat session / chat run: it
+// is a one-shot issue creation with a PRIVATE (ephemeral) confirmation back to
+// the invoker via the command's response_url. It reuses the same installation
 // routing, identity + membership checks, and the shared IssueService, so a
 // slash-command issue shares the counter, dup guard, project boundary,
-// broadcast, analytics and agent-enqueue with every other create path.
+// broadcast, analytics and agent-enqueue with every other create path — i.e. a
+// `todo` issue assigned to the agent still triggers the agent through the normal
+// issue-assignment path (maybeEnqueueOnAssign), exactly like the message /issue.
 
 const issueSlashCommand = "/issue"
 

@@ -49,6 +49,7 @@ oauth_config:
       - chat:write
       - reactions:write
       - users:read
+      - commands
 settings:
   event_subscriptions:
     bot_events:
@@ -76,6 +77,7 @@ settings:
 | `im:history` + `message.im` | Bot への **DM** を受け取ります（すべての DM メッセージが読み取られます）。 |
 | `channels:history` / `groups:history` / `mpim:history` + 対応する `message.*` イベント | パブリックチャンネル、プライベートチャンネル、グループ DM のメッセージを受け取ります。これらの中では、Bot は自分を **@ メンション**したメッセージにのみ反応します。 |
 | `users:read` | Multica が（`bots.info` を介して）あなたの 2 つのトークンが同じアプリのものであることを検証するために必要です。 |
+| `commands` | `/issue` スラッシュコマンドを有効にする bot スコープです（`features.slash_commands` と対になります）。これがないと、マニフェストを更新して再インストールしてもコマンドが付与されません。 |
 | `socket_mode_enabled: true` | Bot は Socket Mode 経由で外向きに接続します——**公開 URL／リクエスト URL は不要**です。 |
 | `interactivity.is_enabled: false` | Multica のプロンプトはボタンではなくプレーンなリンクなので、インタラクティビティは不要です。 |
 | `slash_commands`（`/issue`） | `/issue` スラッシュコマンドを登録し、誰でもメッセージ入力欄から Multica イシューを起票できるようにします。Socket Mode 経由で配信され、リクエスト URL は不要です。 |

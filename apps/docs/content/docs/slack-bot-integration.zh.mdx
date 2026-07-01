@@ -49,6 +49,7 @@ oauth_config:
       - chat:write
       - reactions:write
       - users:read
+      - commands
 settings:
   event_subscriptions:
     bot_events:
@@ -76,6 +77,7 @@ settings:
 | `im:history` + `message.im` | 接收发给 Bot 的**私聊**（每一条私聊消息都会被读取）。 |
 | `channels:history` / `groups:history` / `mpim:history` + 对应的 `message.*` 事件 | 接收公开频道、私有频道和群组私聊里的消息。在这些场景里，Bot 只对 **@ 了**它的消息做出响应。 |
 | `users:read` | 必需，这样 Multica 才能（通过 `bots.info`）核实你的两个 token 属于同一个 app。 |
+| `commands` | 启用 `/issue` 斜杠命令所需的 bot 权限（和 `features.slash_commands` 搭配）。少了它，即使更新 manifest 并重装，也拿不到这个命令。 |
 | `socket_mode_enabled: true` | Bot 通过 Socket Mode 向外连接——**无需任何公网 URL / request URL**。 |
 | `interactivity.is_enabled: false` | Multica 的提示是纯链接，不是按钮，所以不需要交互性。 |
 | `slash_commands`（`/issue`） | 注册 `/issue` 斜杠命令，让任何人都能从消息框直接创建一个 Multica issue。通过 Socket Mode 下发——无需 request URL。 |

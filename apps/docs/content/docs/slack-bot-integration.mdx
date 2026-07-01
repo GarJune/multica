@@ -49,6 +49,7 @@ oauth_config:
       - chat:write
       - reactions:write
       - users:read
+      - commands
 settings:
   event_subscriptions:
     bot_events:
@@ -76,6 +77,7 @@ This manifest configures everything Multica needs, so you don't set anything by 
 | `im:history` + `message.im` | Receive **DMs** to the bot (every DM message is read). |
 | `channels:history` / `groups:history` / `mpim:history` + the matching `message.*` events | Receive messages in public channels, private channels, and group DMs. In these, the bot only acts on messages that **@-mention** it. |
 | `users:read` | Required so Multica can verify (via `bots.info`) that your two tokens belong to the same app. |
+| `commands` | The bot scope that enables the `/issue` slash command (pairs with `features.slash_commands`). Without it, updating the manifest and reinstalling won't grant the command. |
 | `socket_mode_enabled: true` | The bot connects out over Socket Mode — **no public URL / request URL needed**. |
 | `interactivity.is_enabled: false` | Multica's prompts are plain links, not buttons, so interactivity isn't needed. |
 | `slash_commands` (`/issue`) | Registers the `/issue` slash command so anyone can file a Multica issue from the message box. Delivered over Socket Mode — no request URL. |

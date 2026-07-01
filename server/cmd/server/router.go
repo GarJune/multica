@@ -471,8 +471,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// `/issue` slash command (MUL-3908): a real Slack slash command,
 			// delivered over the same Socket Mode connection. It is a one-shot
-			// issue creation (no chat session / agent run) with a private ephemeral
-			// confirmation, reusing the shared IssueService + binding service.
+			// issue creation (no chat session or chat run; a todo issue assigned to
+			// the agent still triggers it via normal issue-assignment) with a private
+			// ephemeral confirmation, reusing the shared IssueService + binding service.
 			slackSlash := slack.NewSlashCommandProcessor(slack.SlashCommandConfig{
 				Queries: queries,
 				Issues:  h.IssueService,
