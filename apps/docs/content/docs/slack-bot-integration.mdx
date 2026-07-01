@@ -34,6 +34,10 @@ features:
   bot_user:
     display_name: Multica
     always_online: true
+  slash_commands:
+    - command: /issue
+      description: Create a Multica issue
+      usage_hint: "[title]"
 oauth_config:
   scopes:
     bot:
@@ -74,6 +78,7 @@ This manifest configures everything Multica needs, so you don't set anything by 
 | `users:read` | Required so Multica can verify (via `bots.info`) that your two tokens belong to the same app. |
 | `socket_mode_enabled: true` | The bot connects out over Socket Mode — **no public URL / request URL needed**. |
 | `interactivity.is_enabled: false` | Multica's prompts are plain links, not buttons, so interactivity isn't needed. |
+| `slash_commands` (`/issue`) | Registers the `/issue` slash command so anyone can file a Multica issue from the message box. Delivered over Socket Mode — no request URL. |
 
 There is **no OAuth redirect URL**, because BYO doesn't use OAuth.
 
@@ -118,7 +123,7 @@ Setting this up for **multiple agents**? Repeat the whole flow once per agent �
 | **Agent → Integrations** | Owners and admins see **Connect Slack**; once connected it flips to a **Connected to Slack** badge with a **Disconnect** control. |
 | **DM the bot** | A workspace member messages the bot directly. The conversation becomes a Multica [chat](/chat) session with the agent; every DM message is read. |
 | **@-mention in a channel** | Invite the bot (`/invite @your-bot`) and @-mention it. Only the mentioning message is read — the bot does not listen to the whole channel. Each @bot **thread** is its own session. |
-| **`/issue` command** | Starting a message with `/issue <title>` (optionally with a body on the next lines) creates a new Multica issue in the workspace, attributed to you. |
+| **`/issue` slash command** | Type `/issue <title>` (in a channel or a DM) to create a Multica issue in the workspace, attributed to you. It replies privately with a confirmation — no @-mention needed. |
 | **Reply** | The agent's answer is posted back into the same DM or thread. |
 
 ## Use the bot (members)
@@ -135,7 +140,7 @@ Only **members of the workspace** can use the bot. If you aren't a member, or yo
 
 - **In a channel** — the bot isn't auto-joined. Run `/invite @your-bot` once, then `@your-bot <your message>`. Re-mention it for each follow-up (the bot only reads messages that mention it).
 - **In a DM** — open the bot from the Slack sidebar's **Apps** section and message it directly; no mention needed.
-- **File an issue** — send `/issue Fix the login redirect`; add more lines after the title for a description.
+- **File an issue** — use the `/issue` slash command, e.g. `/issue Fix the login redirect`. It works in a channel or a DM (no @-mention needed) and replies with a private confirmation. First-time users get a one-time link to connect their account.
 
 ## Manage and disconnect
 
