@@ -220,6 +220,8 @@
     "feature_co_author_description_suffix": "。",
     "feature_auto_link_label": "Issue ↔ PR 自动关联",
     "feature_auto_link_description": "根据 PR 标题、正文和分支名匹配 issue 编号并自动建立链接。",
+    "feature_auto_close_label": "PR 合并后自动关闭 Issue",
+    "feature_auto_close_description": "当带有 “Closes/Fixes/Resolves MUL-X” 关键字的已关联 PR 被合并时，将 Issue 推进为 Done。关闭此项可以保留自动关联的侧栏，但让 Issue 状态由人工管理。",
     "section_repositories": "代码仓库",
     "repositories_shortcut_label": "仓库 URL 仍在「代码仓库」标签页中管理",
     "repositories_shortcut_link": "前往管理 →",

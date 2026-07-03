@@ -13,6 +13,7 @@ describe("deriveGitHubSettings", () => {
       prSidebar: true,
       coAuthor: true,
       autoLinkPRs: true,
+      autoCloseIssueOnPRMerge: true,
     });
   });
 
@@ -22,6 +23,7 @@ describe("deriveGitHubSettings", () => {
       prSidebar: true,
       coAuthor: true,
       autoLinkPRs: true,
+      autoCloseIssueOnPRMerge: true,
     });
   });
 
@@ -32,6 +34,7 @@ describe("deriveGitHubSettings", () => {
         github_pr_sidebar_enabled: true,
         co_authored_by_enabled: true,
         github_auto_link_prs_enabled: true,
+        github_auto_close_issue_on_pr_merge_enabled: true,
       }),
     );
     expect(got).toEqual({
@@ -39,21 +42,57 @@ describe("deriveGitHubSettings", () => {
       prSidebar: false,
       coAuthor: false,
       autoLinkPRs: false,
+      autoCloseIssueOnPRMerge: false,
     });
   });
 
   it("each sub-flag can be flipped independently when master is on", () => {
     expect(
       deriveGitHubSettings(ws({ github_pr_sidebar_enabled: false })),
-    ).toMatchObject({ enabled: true, prSidebar: false, coAuthor: true, autoLinkPRs: true });
+    ).toMatchObject({
+      enabled: true,
+      prSidebar: false,
+      coAuthor: true,
+      autoLinkPRs: true,
+      autoCloseIssueOnPRMerge: true,
+    });
 
     expect(
       deriveGitHubSettings(ws({ co_authored_by_enabled: false })),
-    ).toMatchObject({ enabled: true, prSidebar: true, coAuthor: false, autoLinkPRs: true });
+    ).toMatchObject({
+      enabled: true,
+      prSidebar: true,
+      coAuthor: false,
+      autoLinkPRs: true,
+      autoCloseIssueOnPRMerge: true,
+    });
 
     expect(
       deriveGitHubSettings(ws({ github_auto_link_prs_enabled: false })),
-    ).toMatchObject({ enabled: true, prSidebar: true, coAuthor: true, autoLinkPRs: false });
+    ).toMatchObject({
+      enabled: true,
+      prSidebar: true,
+      coAuthor: true,
+      autoLinkPRs: false,
+      // autoCloseIssueOnPRMerge is decoupled from auto-link at the derivation
+      // layer — the UI is responsible for disabling the switch when
+      // autoLinkPRs is off (since a link that never happens can never trigger
+      // auto-done anyway). Keeping them independent here means re-enabling
+      // auto-link doesn't silently flip the auto-done flag.
+      autoCloseIssueOnPRMerge: true,
+    });
+
+    expect(
+      deriveGitHubSettings(
+        ws({ github_auto_close_issue_on_pr_merge_enabled: false }),
+      ),
+    ).toMatchObject({
+      enabled: true,
+      prSidebar: true,
+      coAuthor: true,
+      autoLinkPRs: true,
+      autoCloseIssueOnPRMerge: false,
+    });
   });
 
   it("treats non-false values (true, null, missing) as enabled", () => {
@@ -62,5 +101,10 @@ describe("deriveGitHubSettings", () => {
         ws({ github_enabled: true, github_pr_sidebar_enabled: null }),
       ),
     ).toMatchObject({ enabled: true, prSidebar: true });
+    expect(
+      deriveGitHubSettings(
+        ws({ github_auto_close_issue_on_pr_merge_enabled: null }),
+      ),
+    ).toMatchObject({ autoCloseIssueOnPRMerge: true });
   });
 });

@@ -277,4 +277,51 @@ describe("GitHubTab", () => {
     await user.click(screen.getByRole("button", { name: /Manage repositories/ }));
     expect(mockNavPush).toHaveBeenCalledWith("/acme/settings?tab=repositories");
   });
+
+  it("auto-close-on-merge switch defaults to on and persists to github_auto_close_issue_on_pr_merge_enabled=false", async () => {
+    const user = userEvent.setup();
+    mockUpdateWorkspace.mockResolvedValue({
+      ...workspaceRef.current,
+      settings: { github_auto_close_issue_on_pr_merge_enabled: false },
+    });
+
+    render(<GitHubTab />, { wrapper: I18nWrapper });
+
+    const autoClose = screen.getByRole("switch", {
+      name: /Merged PR closes the issue/i,
+    });
+    expect(autoClose.getAttribute("aria-checked")).toBe("true");
+
+    await user.click(autoClose);
+
+    await waitFor(() => {
+      expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
+        settings: { github_auto_close_issue_on_pr_merge_enabled: false },
+      });
+    });
+  });
+
+  it("auto-close-on-merge switch is disabled when auto-link is off (no link → no auto-done)", () => {
+    workspaceRef.current.settings = { github_auto_link_prs_enabled: false };
+    render(<GitHubTab />, { wrapper: I18nWrapper });
+
+    const autoClose = screen.getByRole("switch", {
+      name: /Merged PR closes the issue/i,
+    });
+    const ariaDisabled = autoClose.getAttribute("aria-disabled");
+    const disabled = autoClose.hasAttribute("disabled");
+    expect(ariaDisabled === "true" || disabled).toBe(true);
+  });
+
+  it("auto-close-on-merge reflects a persisted `false` from workspace settings", () => {
+    workspaceRef.current.settings = {
+      github_auto_close_issue_on_pr_merge_enabled: false,
+    };
+    render(<GitHubTab />, { wrapper: I18nWrapper });
+
+    const autoClose = screen.getByRole("switch", {
+      name: /Merged PR closes the issue/i,
+    });
+    expect(autoClose.getAttribute("aria-checked")).toBe("false");
+  });
 });

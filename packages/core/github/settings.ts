@@ -9,6 +9,13 @@ export interface GitHubSettings {
   coAuthor: boolean;
   /** Auto-link issues ↔ PRs from webhook payloads. Implies `enabled`. */
   autoLinkPRs: boolean;
+  /**
+   * When a linked PR with a "Closes/Fixes/Resolves MUL-X" keyword merges,
+   * advance the linked issue to `done`. Implies `enabled`. Strict sub-flag
+   * of `autoLinkPRs`: the sidebar / link row keeps working when this is
+   * off, only the auto-done side effect is suppressed.
+   */
+  autoCloseIssueOnPRMerge: boolean;
 }
 
 /**
@@ -25,5 +32,7 @@ export function deriveGitHubSettings(
     prSidebar: enabled && s.github_pr_sidebar_enabled !== false,
     coAuthor: enabled && s.co_authored_by_enabled !== false,
     autoLinkPRs: enabled && s.github_auto_link_prs_enabled !== false,
+    autoCloseIssueOnPRMerge:
+      enabled && s.github_auto_close_issue_on_pr_merge_enabled !== false,
   };
 }

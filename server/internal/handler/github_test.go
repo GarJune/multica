@@ -411,6 +411,129 @@ func TestWebhook_MergedPR_PreservesCancelled(t *testing.T) {
 	}
 }
 
+// TestWebhook_MergedPR_AutoCloseDisabled_KeepsLinkOnly guards the workspace
+// setting `github_auto_close_issue_on_pr_merge_enabled=false`. When a
+// closing-keyword PR merges under this flag, the PR must still be mirrored
+// and linked to the issue (the sidebar keeps working, close_intent is still
+// stamped on the link row for later re-runs), but the issue must stay in
+// its pre-merge status — the workspace has opted out of the auto-done side
+// effect while keeping auto-link.
+func TestWebhook_MergedPR_AutoCloseDisabled_KeepsLinkOnly(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	ctx := context.Background()
+	secret := "auto-close-disabled-secret"
+	t.Setenv("GITHUB_WEBHOOK_SECRET", secret)
+
+	// Read prior settings so we can restore them in cleanup — this test
+	// shares the singleton testWorkspaceID with other tests and must not
+	// leak the disabled flag into an unrelated case.
+	var prevSettings []byte
+	testPool.QueryRow(ctx, `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&prevSettings)
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET settings = $1 WHERE id = $2`,
+		[]byte(`{"github_auto_close_issue_on_pr_merge_enabled":false}`), testWorkspaceID); err != nil {
+		t.Fatalf("set workspace settings: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":  "Auto-close disabled",
+		"status": "in_progress",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: %d %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM issue_pull_request WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM github_pull_request WHERE workspace_id = $1`, testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM github_installation WHERE workspace_id = $1`, testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM activity_log WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
+		if prevSettings == nil {
+			testPool.Exec(ctx, `UPDATE workspace SET settings = NULL WHERE id = $1`, testWorkspaceID)
+		} else {
+			testPool.Exec(ctx, `UPDATE workspace SET settings = $1 WHERE id = $2`, prevSettings, testWorkspaceID)
+		}
+	})
+
+	const installationID int64 = 40560012
+	if _, err := testHandler.Queries.CreateGitHubInstallation(ctx, db.CreateGitHubInstallationParams{
+		WorkspaceID:    parseUUID(testWorkspaceID),
+		InstallationID: installationID,
+		AccountLogin:   "auto-close-off-acct",
+		AccountType:    "User",
+	}); err != nil {
+		t.Fatalf("CreateGitHubInstallation: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"action": "closed",
+		"pull_request": map[string]any{
+			"number":     8801,
+			"html_url":   "https://github.com/acme/widget/pull/8801",
+			"title":      "Fix login " + created.Identifier,
+			"body":       "Closes " + created.Identifier,
+			"state":      "closed",
+			"draft":      false,
+			"merged":     true,
+			"merged_at":  "2026-04-29T00:00:00Z",
+			"closed_at":  "2026-04-29T00:00:00Z",
+			"created_at": "2026-04-28T00:00:00Z",
+			"updated_at": "2026-04-29T00:00:00Z",
+			"head":       map[string]any{"ref": "fix/login"},
+			"user":       map[string]any{"login": "octocat", "avatar_url": ""},
+		},
+		"repository":   map[string]any{"name": "widget", "owner": map[string]any{"login": "acme"}},
+		"installation": map[string]any{"id": installationID},
+	})
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	w = httptest.NewRecorder()
+	req2 := httptest.NewRequest("POST", "/api/webhooks/github", bytes.NewReader(body))
+	req2.Header.Set("X-GitHub-Event", "pull_request")
+	req2.Header.Set("X-Hub-Signature-256", sig)
+	testHandler.HandleGitHubWebhook(w, req2)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("webhook: expected 202, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	// PR row still mirrored (auto-link is on).
+	if _, err := testHandler.Queries.GetGitHubPullRequest(ctx, db.GetGitHubPullRequestParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		RepoOwner:   "acme",
+		RepoName:    "widget",
+		PrNumber:    8801,
+	}); err != nil {
+		t.Fatalf("expected PR row present under auto-close-disabled: %v", err)
+	}
+
+	// Link row still exists — this is the whole point of the flag: keep
+	// the sidebar link, drop only the auto-done side effect.
+	linked, err := testHandler.Queries.ListPullRequestsByIssue(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("ListPullRequestsByIssue: %v", err)
+	}
+	if len(linked) != 1 {
+		t.Fatalf("expected 1 linked PR (link path unchanged), got %d", len(linked))
+	}
+
+	// Issue must remain in_progress; auto-done was suppressed.
+	updated, err := testHandler.Queries.GetIssue(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if updated.Status != "in_progress" {
+		t.Errorf("expected issue status 'in_progress' with auto-close disabled, got %q", updated.Status)
+	}
+}
+
 // TestWebhook_UninstallReturnsWorkspaceForBroadcast guards #4: the uninstall
 // path must look up the workspace_id BEFORE deleting the row so the
 // resulting `github_installation:deleted` event is broadcast scoped to that

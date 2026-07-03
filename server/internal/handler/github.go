@@ -934,18 +934,33 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 		// just linked once both the PR row and the link row are persisted,
 		// so the aggregate query sees the freshest state. We advance the
 		// issue to done when:
-		//   1. the issue isn't already terminal (`done` / `cancelled`);
-		//   2. no linked PR is still `open` / `draft`;
-		//   3. at least one merged linked PR declared close_intent (a
+		//   1. the workspace has `github_auto_close_issue_on_pr_merge_enabled`
+		//      on (default true — decouples "auto-link PRs" from
+		//      "PR merge closes issue" so a workspace can keep the link
+		//      sidebar while still managing issue status manually);
+		//   2. the issue isn't already terminal (`done` / `cancelled`);
+		//   3. no linked PR is still `open` / `draft`;
+		//   4. at least one merged linked PR declared close_intent (a
 		//      "Closes/Fixes/Resolves" keyword on its link row).
-		// Rule (3) is what prevents "Follow up in MUL-2" / "Unblocks MUL-3"
+		// Rule (4) is what prevents "Follow up in MUL-2" / "Unblocks MUL-3"
 		// references from being treated the same as "Closes MUL-1", and
 		// also prevents an "all closed-without-merge" sequence from
 		// silently auto-closing the issue — if nothing carrying closing
 		// intent was ever delivered, the user should decide manually.
 		if state == "merged" || state == "closed" {
+			// Read the auto-close flag once per event, not per issue —
+			// the value only depends on the workspace, and reading it
+			// inside the loop would repeat the same GetWorkspace query.
+			autoCloseEnabled := h.workspaceAutoCloseIssueOnPRMergeEnabled(ctx, wsID)
 			for _, issue := range reevalIssues {
 				if issue.Status == "done" || issue.Status == "cancelled" {
+					continue
+				}
+				if !autoCloseEnabled {
+					// Auto-link still recorded the close_intent on the
+					// link row above (so re-enabling the flag later
+					// resumes historical behavior on the next terminal
+					// event), but we stop short of advancing the issue.
 					continue
 				}
 				counts, err := h.Queries.GetIssuePullRequestCloseAggregate(ctx, issue.ID)
@@ -1388,6 +1403,37 @@ func (h *Handler) workspaceAutoLinkPRsEnabled(ctx context.Context, workspaceID p
 		return true
 	}
 	return *s.GitHubAutoLinkPRsEnabled
+}
+
+// workspaceAutoCloseIssueOnPRMergeEnabled decides whether a merged PR that
+// declared `Closes/Fixes/Resolves MUL-X` should auto-advance the linked
+// Multica issue to `done`. This is a strict sub-flag of auto-link: linking
+// still happens (the sidebar still populates, close_intent is still stamped
+// on the link row), but the terminal-event branch in handlePullRequestEvent
+// stops short of calling advanceIssueToDone.
+//
+// Defaults to true so workspaces predating this setting keep the historical
+// "PR merge closes issue" behavior. Master switch (`github_enabled=false`)
+// still forces off, matching workspaceAutoLinkPRsEnabled precedence.
+func (h *Handler) workspaceAutoCloseIssueOnPRMergeEnabled(ctx context.Context, workspaceID pgtype.UUID) bool {
+	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
+	if err != nil || len(ws.Settings) == 0 {
+		return true
+	}
+	var s struct {
+		GitHubEnabled                        *bool `json:"github_enabled"`
+		GitHubAutoCloseIssueOnPRMergeEnabled *bool `json:"github_auto_close_issue_on_pr_merge_enabled"`
+	}
+	if err := json.Unmarshal(ws.Settings, &s); err != nil {
+		return true
+	}
+	if s.GitHubEnabled != nil && !*s.GitHubEnabled {
+		return false
+	}
+	if s.GitHubAutoCloseIssueOnPRMergeEnabled == nil {
+		return true
+	}
+	return *s.GitHubAutoCloseIssueOnPRMergeEnabled
 }
 
 // the workspace's configured prefix and the number resolves to a real issue.

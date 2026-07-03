@@ -220,6 +220,8 @@
     "feature_co_author_description_suffix": "を追加します。",
     "feature_auto_link_label": "イシューと PR を自動リンク",
     "feature_auto_link_description": "PR のタイトル、本文、ブランチ名をイシュー識別子と照合し、自動でリンクを作成します。",
+    "feature_auto_close_label": "PR マージでイシューを完了",
+    "feature_auto_close_description": "「Closes/Fixes/Resolves MUL-X」キーワードを含むリンク済み PR がマージされたとき、イシューを Done に移動します。オフにすると、自動リンクのサイドバーは維持したまま、イシューのステータス変更を手動で管理できます。",
     "section_repositories": "リポジトリ",
     "repositories_shortcut_label": "リポジトリ URL はリポジトリタブにあります",
     "repositories_shortcut_link": "リポジトリを管理 →",

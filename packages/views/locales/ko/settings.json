@@ -220,6 +220,8 @@
     "feature_co_author_description_suffix": "을(를) 추가합니다.",
     "feature_auto_link_label": "이슈와 PR 자동 연결",
     "feature_auto_link_description": "PR 제목, 본문, 브랜치 이름을 이슈 식별자와 대조해 자동으로 연결합니다.",
+    "feature_auto_close_label": "PR 병합 시 이슈 자동 완료",
+    "feature_auto_close_description": "\"Closes/Fixes/Resolves MUL-X\" 키워드가 포함된 연결된 PR이 병합되면 이슈를 Done으로 이동합니다. 이 옵션을 끄면 자동 연결 사이드바는 유지하면서 이슈 상태를 수동으로 관리할 수 있습니다.",
     "section_repositories": "저장소",
     "repositories_shortcut_label": "저장소 URL은 저장소 탭에 있습니다",
     "repositories_shortcut_link": "저장소 관리 →",

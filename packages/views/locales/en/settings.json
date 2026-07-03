@@ -220,6 +220,8 @@
     "feature_co_author_description_suffix": "to commits authored by agents.",
     "feature_auto_link_label": "Auto-link issues and PRs",
     "feature_auto_link_description": "Match PR titles, bodies, and branch names against issue identifiers and create the link automatically.",
+    "feature_auto_close_label": "Merged PR closes the issue",
+    "feature_auto_close_description": "When a linked PR that declared \"Closes/Fixes/Resolves MUL-X\" is merged, move the issue to Done. Turn this off to keep the auto-link sidebar but manage issue status manually.",
     "section_repositories": "Repositories",
     "repositories_shortcut_label": "Repository URLs live in the Repositories tab",
     "repositories_shortcut_link": "Manage repositories →",
