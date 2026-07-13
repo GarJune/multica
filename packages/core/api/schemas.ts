@@ -16,6 +16,10 @@ import type {
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
   InboxWorkspaceUnread,
+  JiraConnection,
+  JiraProjectBinding,
+  JiraSyncRun,
+  CreateJiraCommentResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   SearchIssuesResponse,
@@ -1102,4 +1106,213 @@ export const CreateBillingPortalSessionResponseSchema = z.object({
 
 export const EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE: CreateBillingPortalSessionResponse = {
   url: "",
+};
+
+export const JiraConnectionSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  member_id: z.string(),
+  site_url: z.string(),
+  auth_type: z.string(),
+  email: z.string().nullable(),
+  jira_account_id: z.string(),
+  jira_display_name: z.string(),
+  jira_email: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_JIRA_CONNECTION: JiraConnection = {
+  id: "",
+  workspace_id: "",
+  member_id: "",
+  site_url: "",
+  auth_type: "pat",
+  email: null,
+  jira_account_id: "",
+  jira_display_name: "",
+  jira_email: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListJiraConnectionsResponseSchema = z.object({
+  connections: z.array(JiraConnectionSchema).default([]),
+}).loose();
+
+export const EMPTY_LIST_JIRA_CONNECTIONS_RESPONSE = {
+  connections: [],
+};
+
+export const JiraProjectSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  name: z.string(),
+  project_type_key: z.string(),
+  avatar_url: z.string(),
+}).loose();
+
+export const ListJiraProjectsResponseSchema = z.object({
+  projects: z.array(JiraProjectSchema).default([]),
+}).loose();
+
+export const EMPTY_LIST_JIRA_PROJECTS_RESPONSE = {
+  projects: [],
+};
+
+export const JiraProjectBindingSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  connection_id: z.string(),
+  project_id: z.string(),
+  project_key: z.string(),
+  project_name: z.string(),
+  sync_enabled: z.boolean(),
+  sync_interval_minutes: z.number(),
+  last_sync_at: z.string().nullable(),
+  last_successful_sync_at: z.string().nullable(),
+  last_error: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_JIRA_PROJECT_BINDING: JiraProjectBinding = {
+  id: "",
+  workspace_id: "",
+  connection_id: "",
+  project_id: "",
+  project_key: "",
+  project_name: "",
+  sync_enabled: true,
+  sync_interval_minutes: 5,
+  last_sync_at: null,
+  last_successful_sync_at: null,
+  last_error: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListJiraProjectBindingsResponseSchema = z.object({
+  bindings: z.array(JiraProjectBindingSchema).default([]),
+}).loose();
+
+export const EMPTY_LIST_JIRA_PROJECT_BINDINGS_RESPONSE = {
+  bindings: [],
+};
+
+export const JiraSyncRunSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  project_binding_id: z.string(),
+  run_type: z.string(),
+  status: z.string(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+  issues_seen: z.number(),
+  issues_created: z.number(),
+  issues_updated: z.number(),
+  issues_skipped: z.number(),
+  error_message: z.string().nullable(),
+}).loose();
+
+export const EMPTY_JIRA_SYNC_RUN: JiraSyncRun = {
+  id: "",
+  workspace_id: "",
+  project_binding_id: "",
+  run_type: "manual",
+  status: "failed",
+  started_at: "",
+  finished_at: null,
+  issues_seen: 0,
+  issues_created: 0,
+  issues_updated: 0,
+  issues_skipped: 0,
+  error_message: null,
+};
+
+export const ListJiraTransitionsResponseSchema = z.object({
+  transitions: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    to_status_name: z.string(),
+    to_status_category: z.string(),
+  }).loose()).default([]),
+}).loose();
+
+export const EMPTY_LIST_JIRA_TRANSITIONS_RESPONSE = {
+  transitions: [],
+};
+
+export const CreateJiraConnectionResponseSchema = z.object({
+  connection: JiraConnectionSchema,
+}).loose();
+
+export const EMPTY_CREATE_JIRA_CONNECTION_RESPONSE = {
+  connection: EMPTY_JIRA_CONNECTION,
+};
+
+export const CreateJiraProjectBindingResponseSchema = z.object({
+  binding: JiraProjectBindingSchema,
+}).loose();
+
+export const EMPTY_CREATE_JIRA_PROJECT_BINDING_RESPONSE = {
+  binding: EMPTY_JIRA_PROJECT_BINDING,
+};
+
+export const SyncJiraProjectBindingResponseSchema = z.object({
+  sync_run: JiraSyncRunSchema,
+}).loose();
+
+export const EMPTY_SYNC_JIRA_PROJECT_BINDING_RESPONSE = {
+  sync_run: EMPTY_JIRA_SYNC_RUN,
+};
+
+export const CreateJiraCommentResponseSchema = z.object({
+  comment: z.object({
+    jira_comment_id: z.string().default(""),
+    body: z.string().default(""),
+    created_at: z.string().default(""),
+    author_display_name: z.string().default(""),
+  }).loose(),
+  issue: IssueSchema,
+}).loose();
+
+export const EMPTY_CREATE_JIRA_COMMENT_RESPONSE: CreateJiraCommentResponse = {
+  comment: {
+    jira_comment_id: "",
+    body: "",
+    created_at: "",
+    author_display_name: "",
+  },
+  issue: {
+    id: "",
+    workspace_id: "",
+    number: 0,
+    identifier: "",
+    title: "",
+    description: null,
+    status: "backlog",
+    priority: "none",
+    assignee_type: null,
+    assignee_id: null,
+    creator_type: "member",
+    creator_id: "",
+    parent_issue_id: null,
+    project_id: null,
+    position: 0,
+    stage: null,
+    start_date: null,
+    due_date: null,
+    metadata: {},
+    created_at: "",
+    updated_at: "",
+  },
+};
+
+export const TransitionJiraIssueResponseSchema = z.object({
+  issue: IssueSchema,
+}).loose();
+
+export const EMPTY_TRANSITION_JIRA_ISSUE_RESPONSE = {
+  issue: EMPTY_CREATE_JIRA_COMMENT_RESPONSE.issue,
 };

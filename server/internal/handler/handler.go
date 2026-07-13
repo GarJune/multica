@@ -157,7 +157,10 @@ type Handler struct {
 	// behaviour can swap in `lark.NewStubAPIClient(...)` directly. The
 	// UI consults IsConfigured() to decide whether to surface install
 	// entry points.
-	LarkAPIClient lark.APIClient
+	LarkAPIClient   lark.APIClient
+	JiraConnections *service.JiraConnectionService
+	JiraSync        *service.JiraSyncService
+	JiraActions     *service.JiraActionService
 	// ChannelSupervisor owns the per-installation supervisor goroutines
 	// that hold the §4.4 WS lease and drive each channel.Channel
 	// (MUL-3620 generalized the Feishu-only Hub into this channel-agnostic

@@ -297,6 +297,17 @@ GROUP BY parent_issue_id;
 
 -- SearchIssues: moved to handler (dynamic SQL for multi-word search support).
 
+-- name: UpdateJiraMirrorIssue :one
+UPDATE issue SET
+    title = $3,
+    description = $4,
+    status = $5,
+    priority = $6,
+    metadata = COALESCE(sqlc.narg('metadata')::jsonb, metadata),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND origin_type = 'jira'
+RETURNING *;
+
 -- name: SetIssueMetadataKey :one
 -- Atomically sets a single key in the issue's metadata JSONB. The
 -- workspace_id filter is the authorization gate — handler resolves the

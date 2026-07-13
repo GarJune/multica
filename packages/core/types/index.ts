@@ -168,6 +168,7 @@ export type {
   SquadMemberStatus,
   SquadMemberStatusListResponse,
 } from "./squad";
+export * from "./jira";
 export type {
   BillingBalance,
   BillingTransaction,

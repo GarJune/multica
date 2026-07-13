@@ -30,7 +30,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import { ContentEditor, type ContentEditorRef, TitleEditor, useFileDropZone, FileDropOverlay } from "../../editor";
+import { ContentEditor, type ContentEditorRef, ReadonlyContent, TitleEditor, useFileDropZone, FileDropOverlay } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import {
   Tooltip,
@@ -45,7 +45,7 @@ import { AvatarGroup, AvatarGroupCount } from "@multica/ui/components/ui/avatar"
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PropRow } from "../../common/prop-row";
 import type { Attachment, Issue, IssueStatus, IssuePriority, TimelineEntry, UpdateIssueRequest } from "@multica/core/types";
-import { contentReferencesAttachment } from "@multica/core/types";
+import { contentReferencesAttachment, isJiraIssue } from "@multica/core/types";
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { formatDateOnly } from "@multica/core/issues/date";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
@@ -62,6 +62,8 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
+import { JiraActions } from "./jira-actions";
+import { JiraSourceBadge } from "./jira-source-badge";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -1424,6 +1426,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     );
   }
 
+  const jiraSynced = isJiraIssue(issue);
+
   const sidebarContent = (
     <div className="space-y-5">
       {/* Properties */}
@@ -1439,7 +1443,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         {propertiesOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
-            <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />
+            {jiraSynced ? (
+              <>
+                <StatusIcon status={issue.status} className="h-3.5 w-3.5" />
+                <span className="text-muted-foreground">{statusLabel(issue.status, t)}</span>
+              </>
+            ) : (
+              <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />
+            )}
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
@@ -1456,12 +1467,19 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               order of `OPTIONAL_PROP_KEYS`. */}
           {visibleOptionalProps.has("priority") && (
             <PropRow label={t(($) => $.detail.prop_priority)}>
-              <PriorityPicker
-                priority={issue.priority}
-                onUpdate={handleUpdateField}
-                align="start"
-                defaultOpen={autoOpenProp === "priority"}
-              />
+              {jiraSynced ? (
+                <>
+                  <PriorityIcon priority={issue.priority} />
+                  <span className="text-muted-foreground">{priorityLabel(issue.priority, t)}</span>
+                </>
+              ) : (
+                <PriorityPicker
+                  priority={issue.priority}
+                  onUpdate={handleUpdateField}
+                  align="start"
+                  defaultOpen={autoOpenProp === "priority"}
+                />
+              )}
             </PropRow>
           )}
           {issue.parent_issue_id != null && visibleOptionalProps.has("stage") && (
@@ -1901,16 +1919,26 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           className="relative flex-1 overflow-y-auto"
         >
         <div className="mx-auto w-full max-w-4xl px-8 py-8">
-          <TitleEditor
-            key={`title-${id}`}
-            defaultValue={issue.title}
-            placeholder={t(($) => $.detail.title_placeholder)}
-            className="w-full text-2xl font-bold leading-snug tracking-tight"
-            onBlur={(value) => {
-              const trimmed = value.trim();
-              if (trimmed && trimmed !== issue.title) handleUpdateField({ title: trimmed });
-            }}
-          />
+          {jiraSynced ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <JiraSourceBadge issue={issue} />
+                <span className="text-xs text-muted-foreground">Synced from Jira</span>
+              </div>
+              <h1 className="text-2xl font-bold leading-snug tracking-tight">{issue.title}</h1>
+            </div>
+          ) : (
+            <TitleEditor
+              key={`title-${id}`}
+              defaultValue={issue.title}
+              placeholder={t(($) => $.detail.title_placeholder)}
+              className="w-full text-2xl font-bold leading-snug tracking-tight"
+              onBlur={(value) => {
+                const trimmed = value.trim();
+                if (trimmed && trimmed !== issue.title) handleUpdateField({ title: trimmed });
+              }}
+            />
+          )}
 
           {parentIssue && (
             <AppLink
@@ -1937,8 +1965,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             </AppLink>
           )}
 
+          {jiraSynced && <div className="mt-5"><JiraActions issue={issue} /></div>}
+
           <div {...descDropZoneProps} className="relative mt-5 rounded-lg">
-            <ContentEditor
+            {jiraSynced ? (
+              issue.description ? (
+                <ReadonlyContent content={issue.description} attachments={descEditorAttachments} />
+              ) : (
+                <p className="text-sm text-muted-foreground">No Jira description.</p>
+              )
+            ) : (
+              <>
+                <ContentEditor
               ref={descEditorRef}
               key={id}
               defaultValue={issue.description || ""}
@@ -1989,6 +2027,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             </div>
             {descDragOver && <FileDropOverlay />}
+              </>
+            )}
           </div>
 
           {/* Sub-issues — Linear-style */}
@@ -2214,14 +2254,16 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             )}
 
             {/* Bottom comment input — no avatar, full width */}
-            <div className="mt-4">
-              {/* key={id}: web's /issues/[id] route doesn't remount on
-                  issueId change, so without an explicit key the editor
-                  keeps the previous issue's in-memory content and the
-                  next keystroke would flush it into the new issue's
-                  draft key. */}
-              <CommentInput key={id} issueId={id} onSubmit={submitComment} />
-            </div>
+            {!jiraSynced && (
+              <div className="mt-4">
+                {/* key={id}: web's /issues/[id] route doesn't remount on
+                    issueId change, so without an explicit key the editor
+                    keeps the previous issue's in-memory content and the
+                    next keystroke would flush it into the new issue's
+                    draft key. */}
+                <CommentInput key={id} issueId={id} onSubmit={submitComment} />
+              </div>
+            )}
           </div>
         </div>
         </div>

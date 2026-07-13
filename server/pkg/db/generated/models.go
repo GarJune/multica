@@ -528,6 +528,75 @@ type IssueToLabel struct {
 	LabelID pgtype.UUID `json:"label_id"`
 }
 
+type JiraConnection struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	MemberID        pgtype.UUID        `json:"member_id"`
+	SiteUrl         string             `json:"site_url"`
+	AuthType        string             `json:"auth_type"`
+	Email           pgtype.Text        `json:"email"`
+	EncryptedToken  string             `json:"encrypted_token"`
+	JiraAccountID   string             `json:"jira_account_id"`
+	JiraDisplayName string             `json:"jira_display_name"`
+	JiraEmail       pgtype.Text        `json:"jira_email"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type JiraIssueMapping struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	ConnectionID       pgtype.UUID        `json:"connection_id"`
+	ProjectBindingID   pgtype.UUID        `json:"project_binding_id"`
+	LocalIssueID       pgtype.UUID        `json:"local_issue_id"`
+	JiraIssueID        string             `json:"jira_issue_id"`
+	JiraKey            string             `json:"jira_key"`
+	JiraProjectID      pgtype.Text        `json:"jira_project_id"`
+	JiraProjectKey     string             `json:"jira_project_key"`
+	JiraStatusName     pgtype.Text        `json:"jira_status_name"`
+	JiraStatusCategory pgtype.Text        `json:"jira_status_category"`
+	JiraIssueType      pgtype.Text        `json:"jira_issue_type"`
+	JiraPriorityName   pgtype.Text        `json:"jira_priority_name"`
+	JiraUpdatedAt      pgtype.Timestamptz `json:"jira_updated_at"`
+	LastSyncedAt       pgtype.Timestamptz `json:"last_synced_at"`
+	RawFields          []byte             `json:"raw_fields"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type JiraProjectBinding struct {
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	ConnectionID         pgtype.UUID        `json:"connection_id"`
+	ProjectID            string             `json:"project_id"`
+	ProjectKey           string             `json:"project_key"`
+	ProjectName          string             `json:"project_name"`
+	SyncEnabled          bool               `json:"sync_enabled"`
+	SyncIntervalMinutes  int32              `json:"sync_interval_minutes"`
+	LastSyncAt           pgtype.Timestamptz `json:"last_sync_at"`
+	LastSuccessfulSyncAt pgtype.Timestamptz `json:"last_successful_sync_at"`
+	LastError            pgtype.Text        `json:"last_error"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type JiraSyncRun struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectBindingID pgtype.UUID        `json:"project_binding_id"`
+	RunType          string             `json:"run_type"`
+	Status           string             `json:"status"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	IssuesSeen       int32              `json:"issues_seen"`
+	IssuesCreated    int32              `json:"issues_created"`
+	IssuesUpdated    int32              `json:"issues_updated"`
+	IssuesSkipped    int32              `json:"issues_skipped"`
+	ErrorMessage     pgtype.Text        `json:"error_message"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type LarkBindingToken struct {
 	TokenHash      string             `json:"token_hash"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

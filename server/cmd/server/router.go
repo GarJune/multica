@@ -25,6 +25,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
+	jiraintegration "github.com/multica-ai/multica/server/internal/integrations/jira"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -407,6 +408,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		}
 	} else {
 		slog.Info("lark integration disabled (MULTICA_LARK_SECRET_KEY not set)")
+	}
+
+	if jiraKey, err := secretbox.LoadKey("MULTICA_JIRA_SECRET_KEY"); err == nil {
+		box, err := secretbox.New(jiraKey)
+		if err != nil {
+			slog.Error("jira: secretbox.New failed; jira integration disabled", "error", err)
+		} else {
+			jiraClient := jiraintegration.NewHTTPClient(jiraintegration.HTTPClientConfig{})
+			jiraConnections := service.NewJiraConnectionService(queries, jiraClient, box)
+			jiraSync := service.NewJiraSyncService(queries, h.IssueService, jiraConnections, jiraClient)
+			h.JiraConnections = jiraConnections
+			h.JiraSync = jiraSync
+			h.JiraActions = service.NewJiraActionService(queries, jiraConnections, jiraSync, jiraClient)
+			slog.Info("jira integration enabled")
+		}
+	} else {
+		slog.Info("jira integration disabled (MULTICA_JIRA_SECRET_KEY not set)")
 	}
 
 	// Slack integration. Multi-tenant B2 model (MUL-3666): Multica hosts ONE
@@ -848,6 +866,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 
+			r.Route("/api/integrations/jira", func(r chi.Router) {
+				r.Get("/connections", h.ListJiraConnections)
+				r.Post("/connections", h.CreateJiraConnection)
+				r.Get("/connections/{connectionID}/projects", h.ListJiraConnectionProjects)
+				r.Get("/project-bindings", h.ListJiraProjectBindings)
+				r.Post("/project-bindings", h.CreateJiraProjectBinding)
+				r.Post("/project-bindings/{bindingID}/sync", h.SyncJiraProjectBinding)
+			})
+
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/search", h.SearchIssues)
@@ -887,6 +914,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Post("/jira/comments", h.CreateJiraIssueComment)
+					r.Get("/jira/transitions", h.ListJiraIssueTransitions)
+					r.Post("/jira/transitions", h.TransitionJiraIssue)
 				})
 			})
 

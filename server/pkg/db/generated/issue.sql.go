@@ -1091,7 +1091,6 @@ func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (M
 }
 
 const setIssueMetadataKey = `-- name: SetIssueMetadataKey :one
-
 UPDATE issue SET
     metadata = jsonb_set(metadata, ARRAY[$1::text], $2::jsonb),
     updated_at = now()
@@ -1106,7 +1105,6 @@ type SetIssueMetadataKeyParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
-// SearchIssues: moved to handler (dynamic SQL for multi-word search support).
 // Atomically sets a single key in the issue's metadata JSONB. The
 // workspace_id filter is the authorization gate — handler resolves the
 // issue first so this is also the tenant check.
@@ -1247,6 +1245,71 @@ type UpdateIssueStatusParams struct {
 // Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
 func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, updateIssueStatus, arg.ID, arg.Status, arg.WorkspaceID)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.Metadata,
+		&i.Stage,
+	)
+	return i, err
+}
+
+const updateJiraMirrorIssue = `-- name: UpdateJiraMirrorIssue :one
+
+UPDATE issue SET
+    title = $3,
+    description = $4,
+    status = $5,
+    priority = $6,
+    metadata = COALESCE($7::jsonb, metadata),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND origin_type = 'jira'
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage
+`
+
+type UpdateJiraMirrorIssueParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Title       string      `json:"title"`
+	Description pgtype.Text `json:"description"`
+	Status      string      `json:"status"`
+	Priority    string      `json:"priority"`
+	Metadata    []byte      `json:"metadata"`
+}
+
+// SearchIssues: moved to handler (dynamic SQL for multi-word search support).
+func (q *Queries) UpdateJiraMirrorIssue(ctx context.Context, arg UpdateJiraMirrorIssueParams) (Issue, error) {
+	row := q.db.QueryRow(ctx, updateJiraMirrorIssue,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.Priority,
+		arg.Metadata,
+	)
 	var i Issue
 	err := row.Scan(
 		&i.ID,

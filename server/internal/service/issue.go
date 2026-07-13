@@ -102,6 +102,8 @@ type IssueCreateOpts struct {
 	// daemon / lark / autopilot). Derived from middleware's client
 	// metadata at the handler layer.
 	Platform string
+
+	SuppressEnqueue bool
 }
 
 // ErrActiveDuplicate signals that the duplicate guard found an active
@@ -281,7 +283,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 
 	s.publishIssueCreated(issue, attachments, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
-	s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID)
+	if !opts.SuppressEnqueue {
+		s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID)
+	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments}, nil
 }

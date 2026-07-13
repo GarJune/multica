@@ -11,6 +11,19 @@ import type {
   UpdateMemberRequest,
   ListIssuesParams,
   ListGroupedIssuesParams,
+  JiraConnection,
+  JiraProjectBinding,
+  ListJiraConnectionsResponse,
+  ListJiraProjectsResponse,
+  ListJiraProjectBindingsResponse,
+  ListJiraTransitionsResponse,
+  CreateJiraConnectionRequest,
+  CreateJiraProjectBindingRequest,
+  SyncJiraProjectBindingResponse,
+  CreateJiraCommentRequest,
+  CreateJiraCommentResponse,
+  TransitionJiraIssueRequest,
+  TransitionJiraIssueResponse,
   Agent,
   CreateAgentRequest,
   AgentTemplate,
@@ -210,6 +223,24 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_CREATE_JIRA_CONNECTION_RESPONSE,
+  EMPTY_CREATE_JIRA_PROJECT_BINDING_RESPONSE,
+  EMPTY_LIST_JIRA_CONNECTIONS_RESPONSE,
+  EMPTY_LIST_JIRA_PROJECT_BINDINGS_RESPONSE,
+  EMPTY_LIST_JIRA_PROJECTS_RESPONSE,
+  EMPTY_LIST_JIRA_TRANSITIONS_RESPONSE,
+  EMPTY_SYNC_JIRA_PROJECT_BINDING_RESPONSE,
+  EMPTY_CREATE_JIRA_COMMENT_RESPONSE,
+  EMPTY_TRANSITION_JIRA_ISSUE_RESPONSE,
+  CreateJiraConnectionResponseSchema,
+  CreateJiraProjectBindingResponseSchema,
+  ListJiraConnectionsResponseSchema,
+  ListJiraProjectBindingsResponseSchema,
+  ListJiraProjectsResponseSchema,
+  ListJiraTransitionsResponseSchema,
+  SyncJiraProjectBindingResponseSchema,
+  CreateJiraCommentResponseSchema,
+  TransitionJiraIssueResponseSchema,
   InboxUnreadSummarySchema,
   EMPTY_INBOX_UNREAD_SUMMARY,
 } from "./schemas";
@@ -2272,6 +2303,83 @@ export class ApiClient {
     return this.fetch(`/api/lark/binding/redeem`, {
       method: "POST",
       body: JSON.stringify({ token }),
+    });
+  }
+
+  async listJiraConnections(): Promise<ListJiraConnectionsResponse> {
+    const raw = await this.fetch<unknown>("/api/integrations/jira/connections");
+    return parseWithFallback(raw, ListJiraConnectionsResponseSchema, EMPTY_LIST_JIRA_CONNECTIONS_RESPONSE, {
+      endpoint: "GET /api/integrations/jira/connections",
+    });
+  }
+
+  async createJiraConnection(data: CreateJiraConnectionRequest): Promise<JiraConnection> {
+    const raw = await this.fetch<unknown>("/api/integrations/jira/connections", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateJiraConnectionResponseSchema, EMPTY_CREATE_JIRA_CONNECTION_RESPONSE, {
+      endpoint: "POST /api/integrations/jira/connections",
+    }).connection;
+  }
+
+  async listJiraProjects(connectionId: string): Promise<ListJiraProjectsResponse> {
+    const raw = await this.fetch<unknown>(`/api/integrations/jira/connections/${connectionId}/projects`);
+    return parseWithFallback(raw, ListJiraProjectsResponseSchema, EMPTY_LIST_JIRA_PROJECTS_RESPONSE, {
+      endpoint: "GET /api/integrations/jira/connections/:connectionId/projects",
+    });
+  }
+
+  async listJiraProjectBindings(): Promise<ListJiraProjectBindingsResponse> {
+    const raw = await this.fetch<unknown>("/api/integrations/jira/project-bindings");
+    return parseWithFallback(raw, ListJiraProjectBindingsResponseSchema, EMPTY_LIST_JIRA_PROJECT_BINDINGS_RESPONSE, {
+      endpoint: "GET /api/integrations/jira/project-bindings",
+    });
+  }
+
+  async createJiraProjectBinding(data: CreateJiraProjectBindingRequest): Promise<JiraProjectBinding> {
+    const raw = await this.fetch<unknown>("/api/integrations/jira/project-bindings", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateJiraProjectBindingResponseSchema, EMPTY_CREATE_JIRA_PROJECT_BINDING_RESPONSE, {
+      endpoint: "POST /api/integrations/jira/project-bindings",
+    }).binding;
+  }
+
+  async syncJiraProjectBinding(bindingId: string): Promise<SyncJiraProjectBindingResponse> {
+    const raw = await this.fetch<unknown>(`/api/integrations/jira/project-bindings/${bindingId}/sync`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, SyncJiraProjectBindingResponseSchema, EMPTY_SYNC_JIRA_PROJECT_BINDING_RESPONSE, {
+      endpoint: "POST /api/integrations/jira/project-bindings/:bindingId/sync",
+    });
+  }
+
+  async commentOnJiraIssue(issueId: string, data: CreateJiraCommentRequest): Promise<CreateJiraCommentResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/jira/comments`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateJiraCommentResponseSchema, EMPTY_CREATE_JIRA_COMMENT_RESPONSE, {
+      endpoint: "POST /api/issues/:issueId/jira/comments",
+    });
+  }
+
+  async listJiraIssueTransitions(issueId: string): Promise<ListJiraTransitionsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/jira/transitions`);
+    return parseWithFallback(raw, ListJiraTransitionsResponseSchema, EMPTY_LIST_JIRA_TRANSITIONS_RESPONSE, {
+      endpoint: "GET /api/issues/:issueId/jira/transitions",
+    });
+  }
+
+  async transitionJiraIssue(issueId: string, data: TransitionJiraIssueRequest): Promise<TransitionJiraIssueResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/jira/transitions`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, TransitionJiraIssueResponseSchema, EMPTY_TRANSITION_JIRA_ISSUE_RESPONSE, {
+      endpoint: "POST /api/issues/:issueId/jira/transitions",
     });
   }
 
