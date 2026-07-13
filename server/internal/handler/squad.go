@@ -937,24 +937,6 @@ func commentMentionsAnyone(content string) bool {
 	return false
 }
 
-// commentRoutesViaMention returns true when the comment will route work via
-// the @mention trigger path — either through its own routing mention, or by
-// inheriting the parent (thread root) mentions on a plain reply (see
-// shouldInheritParentMentions). The squad-leader skip rule treats inherited
-// mentions identically to direct ones: if the @mention path is going to fire,
-// the leader stays out of the way so the same comment never enqueues two
-// agents for the same intent (MUL-3744).
-func commentRoutesViaMention(content string, parentComment *db.Comment, authorType string) bool {
-	if commentMentionsAnyone(content) {
-		return true
-	}
-	own := util.ParseMentions(content)
-	if !shouldInheritParentMentions(parentComment, own, authorType) {
-		return false
-	}
-	return commentMentionsAnyone(parentComment.Content)
-}
-
 // The squad-leader assign/promotion readiness decision now lives in the single
 // service.IssueService.WillEnqueueRun predicate (MUL-3375), shared by the issue
 // write paths and the preview endpoint. The former handler-local mirrors
@@ -978,13 +960,23 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 		return false
 	}
 
-	if !h.canEnqueueSquadLeader(ctx, squad.LeaderID, authorType, authorID, uuidToString(issue.WorkspaceID)) {
+	// Member authors are their own originator; agent-authored triggers have no
+	// request context here, so the originator is left empty (canInvokeAgent
+	// then fails closed for member/team targets — a workspace target still
+	// admits the agent as a workspace principal).
+	leaderOriginator := ""
+	if authorType == "member" {
+		leaderOriginator = authorID
+	}
+	if !h.canEnqueueSquadLeader(ctx, squad.LeaderID, authorType, authorID, leaderOriginator, uuidToString(issue.WorkspaceID)) {
 		return false
 	}
 
 	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
 		IssueID: issue.ID,
 		AgentID: squad.LeaderID,
+		// Key dedup on the reviewed head (TEN-356).
+		HeadSha: h.TaskService.ResolveIssueReviewSHAParam(ctx, issue.ID),
 	})
 	if err != nil || hasPending {
 		return false
