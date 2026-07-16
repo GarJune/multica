@@ -2334,8 +2334,7 @@ export class ApiClient {
     });
   }
 
-<<<<<<< HEAD
-  async listJiraConnections(): Promise<ListJiraConnectionsResponse> {
+async listJiraConnections(): Promise<ListJiraConnectionsResponse> {
     const raw = await this.fetch<unknown>("/api/integrations/jira/connections");
     return parseWithFallback(raw, ListJiraConnectionsResponseSchema, EMPTY_LIST_JIRA_CONNECTIONS_RESPONSE, {
       endpoint: "GET /api/integrations/jira/connections",
@@ -2409,7 +2408,9 @@ export class ApiClient {
     });
     return parseWithFallback(raw, TransitionJiraIssueResponseSchema, EMPTY_TRANSITION_JIRA_ISSUE_RESPONSE, {
       endpoint: "POST /api/issues/:issueId/jira/transitions",
-=======
+    });
+  }
+
   // Composio integration (MUL-3720). All routes are user-scoped (a connection
   // belongs to a user, not a workspace), so none take a workspaceId.
 
@@ -2439,7 +2440,6 @@ export class ApiClient {
   async deleteComposioConnection(connectionId: string): Promise<void> {
     await this.fetch(`/api/integrations/composio/connections/${connectionId}`, {
       method: "DELETE",
->>>>>>> origin/main
     });
   }
 
